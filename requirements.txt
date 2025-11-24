@@ -4,4 +4,4 @@ gspread
 oauth2client
 SpeechRecognition
 streamlit-mic-recorder
-ffmpeg-python
+pydub

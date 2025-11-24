@@ -5,10 +5,11 @@ import datetime
 import speech_recognition as sr
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from streamlit_mic_recorder import mic_recorder # <--- Library ใหม่
+from streamlit_mic_recorder import mic_recorder
 import io
+from pydub import AudioSegment # <--- เพิ่มตัวแปลงไฟล์
 
-st.set_page_config(page_title="RC Sales AI (Cloud Voice)", layout="wide", page_icon="☁️")
+st.set_page_config(page_title="RC Sales AI (Cloud Voice Fix)", layout="wide", page_icon="☁️")
 
 # ==========================================
 # 1. GOOGLE SHEETS CONNECTION
@@ -33,8 +34,7 @@ def get_data(worksheet_name):
         if not df.empty:
             df.columns = [str(c).strip() for c in df.columns]
         return df
-    except Exception as e:
-        # st.error(f"Error reading {worksheet_name}: {e}")
+    except:
         return pd.DataFrame()
 
 def append_data(worksheet_name, row_data):
@@ -64,21 +64,27 @@ def delete_mission_from_sheet(customer_name):
         st.error(f"Error deleting mission: {e}")
 
 # ==========================================
-# 2. VOICE FUNCTION (แบบใหม่: รับไฟล์จาก Browser)
+# 2. VOICE FUNCTION (FIXED: WebM -> WAV)
 # ==========================================
 def transcribe_audio(audio_bytes):
     r = sr.Recognizer()
-    # แปลง Bytes เป็น Audio File ที่ SpeechRecognition อ่านได้
-    audio_file = sr.AudioFile(io.BytesIO(audio_bytes))
-    with audio_file as source:
-        audio_data = r.record(source)
-        try:
+    
+    try:
+        # 1. แปลง WebM (จาก Browser) เป็น WAV (ที่ SpeechRecognition อ่านออก)
+        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        wav_io = io.BytesIO()
+        audio_segment.export(wav_io, format="wav")
+        wav_io.seek(0) # รีเซ็ตเข็มอ่านไฟล์ไปที่จุดเริ่มต้น
+
+        # 2. ส่ง WAV ไปถอดความ
+        with sr.AudioFile(wav_io) as source:
+            audio_data = r.record(source)
             text = r.recognize_google(audio_data, language="th-TH")
             return text
-        except sr.UnknownValueError:
-            return None
-        except sr.RequestError:
-            return None
+            
+    except Exception as e:
+        # st.error(f"Debug Error: {e}") # เปิดบรรทัดนี้ถ้าอยากเห็น error เต็มๆ
+        return None
 
 # ==========================================
 # 3. LOAD DATA
@@ -173,28 +179,26 @@ else:
             
         st.divider()
         
-        # --- NEW VOICE RECORDER UI ---
+        # --- VOICE RECORDER UI ---
         if completed_count < len(my_missions):
             col_rec, col_info = st.columns([1, 3])
             
             with col_rec:
                 st.write("🎙️ **กดปุ่มเพื่อพูด:**")
-                # Component อัดเสียง: พอกดหยุดอัด มันจะส่งค่า audio กลับมาทันที
                 audio = mic_recorder(
                     start_prompt="เริ่มพูด",
                     stop_prompt="หยุดพูด (ส่ง)",
                     just_once=True,
-                    use_container_width=True
+                    use_container_width=True,
+                    format="webm" # ระบุชัดเจนว่ารับ webm
                 )
             
             with col_info:
                 if audio:
-                    # มีข้อมูลเสียงส่งมาจาก Browser
                     with st.spinner("กำลังแปลงเสียงเป็นข้อความ..."):
                         text = transcribe_audio(audio['bytes'])
                         if text:
                             st.success(f"🗣️ ได้ยินว่า: **{text}**")
-                            # Logic ติ๊กถูกอัตโนมัติ
                             if completed_count == 0:
                                  checklist_status.add(my_missions.iloc[0]['topic'])
                             else:
