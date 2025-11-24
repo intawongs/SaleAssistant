@@ -7,9 +7,9 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from streamlit_mic_recorder import mic_recorder
 import io
-from pydub import AudioSegment # <--- เพิ่มตัวแปลงไฟล์
+from pydub import AudioSegment
 
-st.set_page_config(page_title="RC Sales AI (Cloud Voice Fix)", layout="wide", page_icon="☁️")
+st.set_page_config(page_title="RC Sales AI (Report Text)", layout="wide", page_icon="📝")
 
 # ==========================================
 # 1. GOOGLE SHEETS CONNECTION
@@ -64,26 +64,21 @@ def delete_mission_from_sheet(customer_name):
         st.error(f"Error deleting mission: {e}")
 
 # ==========================================
-# 2. VOICE FUNCTION (FIXED: WebM -> WAV)
+# 2. VOICE FUNCTION (Debug Mode)
 # ==========================================
 def transcribe_audio(audio_bytes):
     r = sr.Recognizer()
-    
     try:
-        # 1. แปลง WebM (จาก Browser) เป็น WAV (ที่ SpeechRecognition อ่านออก)
         audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
         wav_io = io.BytesIO()
         audio_segment.export(wav_io, format="wav")
-        wav_io.seek(0) # รีเซ็ตเข็มอ่านไฟล์ไปที่จุดเริ่มต้น
-
-        # 2. ส่ง WAV ไปถอดความ
+        wav_io.seek(0)
         with sr.AudioFile(wav_io) as source:
             audio_data = r.record(source)
             text = r.recognize_google(audio_data, language="th-TH")
             return text
-            
     except Exception as e:
-        # st.error(f"Debug Error: {e}") # เปิดบรรทัดนี้ถ้าอยากเห็น error เต็มๆ
+        st.error(f"Voice Error: {e}")
         return None
 
 # ==========================================
@@ -95,6 +90,9 @@ try:
 except:
     st.stop()
 
+# ใช้ session_state เพื่อเก็บข้อความรายงาน
+if 'report_text_buffer' not in st.session_state:
+    st.session_state.report_text_buffer = ""
 if 'sales_checklist' not in st.session_state:
     st.session_state.sales_checklist = {}
 
@@ -158,6 +156,13 @@ else:
     st.divider()
     target_cust = st.selectbox("🏢 เลือกลูกค้าที่เข้าเยี่ยม:", my_custs)
     
+    # Reset text buffer if customer changes (optional logic)
+    if 'last_cust' not in st.session_state:
+        st.session_state.last_cust = target_cust
+    if st.session_state.last_cust != target_cust:
+        st.session_state.report_text_buffer = ""
+        st.session_state.last_cust = target_cust
+
     my_missions = pd.DataFrame()
     if not df_missions.empty and 'Customer' in df_missions.columns:
         my_missions = df_missions[df_missions['Customer'] == target_cust]
@@ -179,52 +184,82 @@ else:
             
         st.divider()
         
-        # --- VOICE RECORDER UI ---
-        if completed_count < len(my_missions):
-            col_rec, col_info = st.columns([1, 3])
-            
-            with col_rec:
-                st.write("🎙️ **กดปุ่มเพื่อพูด:**")
-                audio = mic_recorder(
-                    start_prompt="เริ่มพูด",
-                    stop_prompt="หยุดพูด (ส่ง)",
-                    just_once=True,
-                    use_container_width=True,
-                    format="webm" # ระบุชัดเจนว่ารับ webm
-                )
-            
-            with col_info:
-                if audio:
-                    with st.spinner("กำลังแปลงเสียงเป็นข้อความ..."):
-                        text = transcribe_audio(audio['bytes'])
-                        if text:
-                            st.success(f"🗣️ ได้ยินว่า: **{text}**")
-                            if completed_count == 0:
-                                 checklist_status.add(my_missions.iloc[0]['topic'])
-                            else:
-                                 for _, r in my_missions.iterrows(): checklist_status.add(r['topic'])
-                            st.session_state.sales_checklist[target_cust] = checklist_status
-                            time.sleep(1)
-                            st.rerun()
+        # --- VOICE RECORDER & REPORT TEXT ---
+        st.write("📝 **รายละเอียดการเข้าพบ (พูดแล้วข้อความจะขึ้นด้านล่าง):**")
+        
+        col_rec, col_area = st.columns([1, 3])
+        
+        with col_rec:
+            st.write("") # Spacer
+            st.write("")
+            audio = mic_recorder(
+                start_prompt="🎙️ กดเพื่อพูด",
+                stop_prompt="⏹️ หยุด (ส่ง)",
+                just_once=True,
+                use_container_width=True,
+                format="webm",
+                key="recorder"
+            )
+        
+        with col_area:
+            # Logic แปลงเสียง
+            if audio:
+                with st.spinner("กำลังแปลงเสียง..."):
+                    text = transcribe_audio(audio['bytes'])
+                    if text:
+                        # เอาข้อความใหม่ไปต่อท้ายข้อความเดิม
+                        if st.session_state.report_text_buffer:
+                            st.session_state.report_text_buffer += " " + text
                         else:
-                            st.warning("ฟังไม่ออกครับ ลองพูดใหม่")
-                else:
-                    st.info("รอรับเสียง...")
-                
-                st.warning(f"เหลืออีก {len(my_missions) - completed_count} ข้อ")
+                            st.session_state.report_text_buffer = text
+                        
+                        # Auto-tick logic (เพื่อความลื่นไหล)
+                        if completed_count == 0:
+                             checklist_status.add(my_missions.iloc[0]['topic'])
+                        else:
+                             for _, r in my_missions.iterrows(): checklist_status.add(r['topic'])
+                        st.session_state.sales_checklist[target_cust] = checklist_status
+                        st.rerun()
 
+            # กล่องข้อความ (Editable)
+            final_report = st.text_area(
+                "แก้ไขข้อความรายงานได้ที่นี่:",
+                value=st.session_state.report_text_buffer,
+                height=100
+            )
+            # อัปเดต Buffer ถ้ามีการพิมพ์แก้ด้วยมือ
+            st.session_state.report_text_buffer = final_report
+
+        # --- SUBMIT BUTTON ---
+        st.divider()
+        if completed_count < len(my_missions):
+            st.warning(f"เหลืออีก {len(my_missions) - completed_count} ข้อ")
         else:
-            st.success("✅ ครบถ้วน!")
+            st.success("✅ ข้อมูลครบถ้วน!")
             if st.button("🚀 ปิดงาน (Save to Cloud)", type="primary"):
+                
+                # Prepare Data
                 topics_str = ", ".join(my_missions['topic'].tolist())
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                report_row = [timestamp, current_user, target_cust, topics_str, "Completed"]
+                
+                # [UPDATED] เพิ่ม final_report ลงไปใน Column สุดท้าย
+                # Columns: Timestamp, Sales_Rep, Customer, Topics_Covered, Status, Report_Detail
+                report_row = [
+                    timestamp, 
+                    current_user, 
+                    target_cust, 
+                    topics_str, 
+                    "Completed", 
+                    final_report # <--- ใส่ข้อความที่พูด/พิมพ์ลงไปตรงนี้
+                ]
                 
                 append_data("Reports", report_row)
                 delete_mission_from_sheet(target_cust)
                 
+                # Clear Local State
                 if target_cust in st.session_state.sales_checklist:
                     del st.session_state.sales_checklist[target_cust]
+                st.session_state.report_text_buffer = "" # Clear text buffer
                 
                 st.toast("บันทึกเรียบร้อย!", icon="☁️")
                 time.sleep(2)
