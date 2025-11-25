@@ -126,6 +126,9 @@ def generate_talking_points(customer_name, mission_df):
         return f"AI Error: {str(e)}"
 
 # 3.2 [ใหม่] ฟังก์ชันตรวจการบ้าน (Strict Auditor)
+# ==========================================
+# ฟังก์ชัน AI ตรวจการบ้าน (Smart Auditor - ปรับปรุงใหม่)
+# ==========================================
 def validate_mission_compliance(topic, desc, report_text):
     try:
         if "GROQ_API_KEY" not in st.secrets:
@@ -134,28 +137,28 @@ def validate_mission_compliance(topic, desc, report_text):
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
         prompt = f"""
-        Role: คุณคือ "ผู้ตรวจสอบข้อมูล" (Strict Auditor) ที่ละเอียดรอบคอบ
-        Task: ตรวจสอบว่า "รายงานของเซลล์" ตอบโจทย์ "คำสั่ง" ได้ถูกต้องหรือไม่
+        Role: คุณคือ "ผู้ตรวจสอบข้อมูล" (Auditor) ที่มีวิจารณญาณดีเยี่ยม
+        Task: ตรวจสอบว่า "รายงานของเซลล์" ตอบโจทย์ "คำสั่ง" ได้สมเหตุสมผลหรือไม่
         
         ---
         คำสั่ง (Mission): {topic} ({desc})
         รายงาน (Report): "{report_text}"
         ---
         
-        กฎการตัดสิน (Criteria):
-        1. **Timeframe:** ถ้าถามปีหน้า แต่ตอบปีนี้ -> FAIL
-        2. **Topic:** ถ้าถามราคา แต่ตอบจำนวน -> FAIL
-        3. **Completeness:** ถ้าตอบไม่ตรงคำถาม -> FAIL
+        กฎการตัดสิน (Criteria - Flexible):
+        1. **Timeframe:** ให้ยอมรับคำที่ความหมายใกล้เคียงกันได้ (เช่น ปลายปี = ธ.ค., ปีหน้า = ม.ค. เป็นต้น)
+        2. **Substance:** ถ้าเซลล์ให้ "ข้อมูลใหม่" หรือ "คำอธิบาย" ที่เกี่ยวข้องกับโจทย์ แม้จะเป็นข่าวร้ายหรือปฏิเสธ ก็ถือว่า **PASS** (เพราะถือว่าได้ไปถามมาแล้ว)
+        3. **Completeness:** ให้ FAIL เฉพาะกรณีที่ "ไม่ได้พูดถึงเรื่องนั้นเลย" หรือ "ตอบคนละเรื่อง" เท่านั้น
         
-        Output Format (ตอบบรรทัดเดียว):
+        Output Format:
         [PASS/FAIL]: [เหตุผลสั้นๆ]
         """
         
         completion = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.0, # สำคัญ! ต้องเป็น 0 เพื่อความแม่นยำ
-            max_tokens=100
+            temperature=0.1, # เพิ่มความยืดหยุ่นนิดนึง (จาก 0 เป็น 0.1)
+            max_tokens=150
         )
         result = completion.choices[0].message.content
         
