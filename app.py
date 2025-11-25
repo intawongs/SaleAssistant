@@ -10,7 +10,7 @@ import io
 from pydub import AudioSegment
 from groq import Groq
 
-st.set_page_config(page_title="RC Sales AI (Report Text)", layout="wide", page_icon="📝")
+st.set_page_config(page_title="RC Sales AI (Final)", layout="wide", page_icon="🚀")
 
 # ==========================================
 # 1. GOOGLE SHEETS CONNECTION
@@ -64,29 +64,27 @@ def delete_mission_from_sheet(customer_name):
     except Exception as e:
         st.error(f"Error deleting mission: {e}")
 
-# ... จบฟังก์ชัน delete_mission_from_sheet ...
-
 # ==========================================
-# [เพิ่มใหม่] ฟังก์ชัน AI Talking Points (Groq)
+# 2. AI TALKING POINTS (Groq)
 # ==========================================
 def generate_talking_points(customer_name, mission_df):
     try:
         if "GROQ_API_KEY" not in st.secrets:
-            return "⚠️ กรุณาใส่ GROQ_API_KEY ใน Secrets"
+            return "⚠️ กรุณาใส่ GROQ_API_KEY ใน Secrets ก่อนครับ"
 
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
         # รวบรวมโจทย์ (Mission)
+        tasks_text = ""
         if not mission_df.empty:
             tasks_list = [f"- {row['topic']}: {row['desc']}" for _, row in mission_df.iterrows()]
             tasks_text = "\n".join(tasks_list)
         else:
-            # ถ้าไม่มีโจทย์ ให้ AI คิดเรื่องทั่วไป
-            tasks_text = "ไม่มีโจทย์พิเศษ (เน้นสร้างความสัมพันธ์และอัปเดตสถานการณ์ทั่วไป)"
+            tasks_text = "ไม่มีโจทย์พิเศษ (เน้นสร้างความสัมพันธ์ทั่วไป)"
 
-        # --- แก้ Prompt ใหม่ ให้ฉลาดและตรงประเด็นขึ้น ---
+        # Prompt ฉบับปรับปรุง
         prompt = f"""
-        บทบาทของคุณ: คุณคือ "ผู้ช่วยส่วนตัวของเซลล์มืออาชีพ" (Professional Sales Assistant) ที่เก่งเรื่องศิลปะการพูดและการเข้าสังคม
+        บทบาทของคุณ: คุณคือ "ผู้ช่วยส่วนตัวของเซลล์มืออาชีพ" (Professional Sales Assistant)
         
         สถานการณ์: เซลล์กำลังจะไปเยี่ยมลูกค้าชื่อ: "{customer_name}"
         
@@ -100,11 +98,9 @@ def generate_talking_points(customer_name, mission_df):
         
         สิ่งที่ต้องการ (Output):
         1. 🧊 Ice Breaker (1 ประโยค): ประโยคเปิดบทสนทนาที่เข้ากับสถานการณ์
-        2. 🎯 Key Talking Points (3 ข้อ): 
-           - ถ้าเป็นงานเลี้ยง: ให้เน้นพูดถึงความสำคัญของลูกค้า อยากขอบคุณที่สนับสนุนกันมา และรายละเอียดงาน
-           - ถ้าเป็นงานขาย: ให้เน้นคำถามจิตวิทยาเพื่อล้วงข้อมูล
+        2. 🎯 Key Talking Points (3 ข้อ): ประเด็นสำคัญที่ควรพูดเพื่อให้บรรลุโจทย์
         
-        **ห้ามพูดเรื่องที่ไม่เกี่ยวกับโจทย์ และห้ามใช้ภาษาลิเกเกินไป ขอภาษาคนทำงานคุยกัน**
+        **ขอภาษาพูดคนไทยทำงานจริงๆ สั้น กระชับ ไม่ลิเก**
         """
         
         completion = client.chat.completions.create(
@@ -116,10 +112,9 @@ def generate_talking_points(customer_name, mission_df):
         return completion.choices[0].message.content
     except Exception as e:
         return f"AI Error: {str(e)}"
-    
 
 # ==========================================
-# 2. VOICE FUNCTION (Debug Mode)
+# 3. VOICE FUNCTION (Audio Processing)
 # ==========================================
 def transcribe_audio(audio_bytes):
     r = sr.Recognizer()
@@ -133,11 +128,10 @@ def transcribe_audio(audio_bytes):
             text = r.recognize_google(audio_data, language="th-TH")
             return text
     except Exception as e:
-        st.error(f"Voice Error: {e}")
         return None
 
 # ==========================================
-# 3. LOAD DATA
+# 4. LOAD DATA
 # ==========================================
 try:
     df_assignments = get_data("Assignments")
@@ -145,19 +139,22 @@ try:
 except:
     st.stop()
 
-# ใช้ session_state เพื่อเก็บข้อความรายงาน
 if 'report_text_buffer' not in st.session_state:
     st.session_state.report_text_buffer = ""
 if 'sales_checklist' not in st.session_state:
     st.session_state.sales_checklist = {}
 
 # ==========================================
-# 4. UI & LOGIC
+# 5. UI & LOGIC
 # ==========================================
 user_role = st.sidebar.radio("Login Role:", ("Sales Manager", "Sales Rep"))
 
 if st.sidebar.button("🔄 Refresh Data"):
     st.cache_data.clear()
+    if 'report_text_buffer' in st.session_state:
+        st.session_state.report_text_buffer = ""
+    if 'sales_checklist' in st.session_state:
+        st.session_state.sales_checklist = {}
     st.rerun()
 
 # --- MANAGER ROLE ---
@@ -172,6 +169,7 @@ if user_role == "Sales Manager":
         with col1:
             sales_list = df_assignments['Sales_Rep'].unique() if not df_assignments.empty else []
             selected_sale = st.selectbox("Sales Rep", sales_list)
+            
             cust_list = []
             if not df_assignments.empty and selected_sale:
                 cust_list = df_assignments[df_assignments['Sales_Rep'] == selected_sale]['Customer'].unique()
@@ -199,29 +197,34 @@ if user_role == "Sales Manager":
 
 # --- SALES ROLE ---
 else:
-
     st.header("📱 Sales App")
     
-    # 1. Login & Filter Customer List
+    # 1. Login
     sales_list = df_assignments['Sales_Rep'].unique() if not df_assignments.empty else []
     current_user = st.selectbox("👤 Login:", sales_list)
     
+    # 2. Select Customer
     my_custs = []
     if not df_assignments.empty and current_user:
         my_custs = df_assignments[df_assignments['Sales_Rep'] == current_user]['Customer'].unique()
     
     st.divider()
-    
-    # 2. เลือกลูกค้า (ประกาศครั้งเดียวพอ)
     target_cust = st.selectbox("🏢 เลือกลูกค้าที่เข้าเยี่ยม:", my_custs)
     
-    # 3. ดึง Mission มาเตรียมไว้ (ประกาศครั้งเดียวตรงนี้ ใช้ได้ยาวจนจบบรรทัดล่าง)
+    # Logic รีเซ็ตกล่องข้อความเมื่อเปลี่ยนลูกค้า
+    if 'last_cust' not in st.session_state:
+        st.session_state.last_cust = target_cust
+    if st.session_state.last_cust != target_cust:
+        st.session_state.report_text_buffer = ""
+        st.session_state.last_cust = target_cust
+
+    # 3. ดึง Mission มาเตรียมไว้
     my_missions = pd.DataFrame()
     if not df_missions.empty and 'Customer' in df_missions.columns:
         my_missions = df_missions[df_missions['Customer'] == target_cust]
 
     # ==========================================
-    # [ส่วนแทรก] AI Talking Points
+    # [SECTION] AI Talking Points
     # ==========================================
     with st.expander("✨ ให้ AI ช่วยคิดบทพูด (Talking Points)", expanded=False):
         if st.button("💡 กดเพื่อให้ AI วิเคราะห์โจทย์"):
@@ -231,14 +234,7 @@ else:
     
     st.divider()
 
-    # 4. Logic รีเซ็ตกล่องข้อความเมื่อเปลี่ยนลูกค้า
-    if 'last_cust' not in st.session_state:
-        st.session_state.last_cust = target_cust
-    if st.session_state.last_cust != target_cust:
-        st.session_state.report_text_buffer = ""
-        st.session_state.last_cust = target_cust
-
-    # 5. แสดงผล Checklist (ใช้ตัวแปร my_missions ที่ประกาศไว้ข้อ 3 ได้เลย)
+    # 4. แสดงผล Checklist & อัดเสียง
     if my_missions.empty:
         st.success("🎉 ไม่มีงานค้าง (All Clear)")
     else:
@@ -283,6 +279,7 @@ else:
                         else:
                             st.session_state.report_text_buffer = text
                         
+                        # Auto-tick logic
                         if completed_count == 0:
                              checklist_status.add(my_missions.iloc[0]['topic'])
                         else:
