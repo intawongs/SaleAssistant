@@ -101,7 +101,7 @@ def generate_talking_points(customer_name, mission_df):
         
         completion = client.chat.completions.create(
             # model="llama3-8b-8192",
-            model="llama3-8b-8192-groq", # <--- เปลี่ยนชื่อโมเดลใหม่
+            model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=500
