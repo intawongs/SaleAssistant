@@ -8,6 +8,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from streamlit_mic_recorder import mic_recorder
 import io
 from pydub import AudioSegment
+from groq import Groq
 
 st.set_page_config(page_title="RC Sales AI (Report Text)", layout="wide", page_icon="📝")
 
@@ -63,6 +64,50 @@ def delete_mission_from_sheet(customer_name):
     except Exception as e:
         st.error(f"Error deleting mission: {e}")
 
+# ... จบฟังก์ชัน delete_mission_from_sheet ...
+
+# ==========================================
+# [เพิ่มใหม่] ฟังก์ชัน AI Talking Points (Groq)
+# ==========================================
+def generate_talking_points(customer_name, mission_df):
+    try:
+        # เช็คว่ามี API Key หรือยัง
+        if "GROQ_API_KEY" not in st.secrets:
+            return "⚠️ กรุณาใส่ GROQ_API_KEY ใน Secrets ก่อนครับ"
+
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        
+        # รวบรวมโจทย์งานวันนี้ส่งให้ AI
+        tasks_text = ""
+        if not mission_df.empty:
+            tasks_list = [f"- หัวข้อ: {row['topic']} (รายละเอียด: {row['desc']})" for _, row in mission_df.iterrows()]
+            tasks_text = "\n".join(tasks_list)
+        else:
+            tasks_text = "ไม่มีงานค้าง (เยี่ยมเยียนทั่วไป)"
+
+        prompt = f"""
+        คุณคือ Sales Coach มืออาชีพ
+        ฉันกำลังจะไปเยี่ยมลูกค้าชื่อ: {customer_name}
+        
+        ภารกิจที่ต้องทำวันนี้:
+        {tasks_text}
+        
+        คำสั่ง:
+        1. ขอประโยคเปิดบทสนทนา (Ice Breaker) ที่ดูเป็นธรรมชาติ 1 ประโยค
+        2. ขอ 3 ประเด็นสำคัญ (Talking Points) เพื่อให้ฉันคุยเข้าเรื่องตามภารกิจได้เนียนๆ
+        
+        ตอบเป็นภาษาไทย สั้น กระชับ เข้าใจง่าย
+        """
+        
+        completion = client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=500
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        return f"AI Error: {str(e)}"
 # ==========================================
 # 2. VOICE FUNCTION (Debug Mode)
 # ==========================================
@@ -144,8 +189,10 @@ if user_role == "Sales Manager":
 
 # --- SALES ROLE ---
 else:
+
     st.header("📱 Sales App")
     
+    # 1. Login & Filter Customer List
     sales_list = df_assignments['Sales_Rep'].unique() if not df_assignments.empty else []
     current_user = st.selectbox("👤 Login:", sales_list)
     
@@ -154,19 +201,34 @@ else:
         my_custs = df_assignments[df_assignments['Sales_Rep'] == current_user]['Customer'].unique()
     
     st.divider()
+    
+    # 2. เลือกลูกค้า (ประกาศครั้งเดียวพอ)
     target_cust = st.selectbox("🏢 เลือกลูกค้าที่เข้าเยี่ยม:", my_custs)
     
-    # Reset text buffer if customer changes (optional logic)
+    # 3. ดึง Mission มาเตรียมไว้ (ประกาศครั้งเดียวตรงนี้ ใช้ได้ยาวจนจบบรรทัดล่าง)
+    my_missions = pd.DataFrame()
+    if not df_missions.empty and 'Customer' in df_missions.columns:
+        my_missions = df_missions[df_missions['Customer'] == target_cust]
+
+    # ==========================================
+    # [ส่วนแทรก] AI Talking Points
+    # ==========================================
+    with st.expander("✨ ให้ AI ช่วยคิดบทพูด (Talking Points)", expanded=False):
+        if st.button("💡 กดเพื่อให้ AI วิเคราะห์โจทย์"):
+            with st.spinner("AI กำลังวางแผนการขายให้คุณ..."):
+                ai_advice = generate_talking_points(target_cust, my_missions)
+                st.markdown(ai_advice)
+    
+    st.divider()
+
+    # 4. Logic รีเซ็ตกล่องข้อความเมื่อเปลี่ยนลูกค้า
     if 'last_cust' not in st.session_state:
         st.session_state.last_cust = target_cust
     if st.session_state.last_cust != target_cust:
         st.session_state.report_text_buffer = ""
         st.session_state.last_cust = target_cust
 
-    my_missions = pd.DataFrame()
-    if not df_missions.empty and 'Customer' in df_missions.columns:
-        my_missions = df_missions[df_missions['Customer'] == target_cust]
-    
+    # 5. แสดงผล Checklist (ใช้ตัวแปร my_missions ที่ประกาศไว้ข้อ 3 ได้เลย)
     if my_missions.empty:
         st.success("🎉 ไม่มีงานค้าง (All Clear)")
     else:
@@ -184,13 +246,13 @@ else:
             
         st.divider()
         
-        # --- VOICE RECORDER & REPORT TEXT ---
+        # --- VOICE RECORDER ---
         st.write("📝 **รายละเอียดการเข้าพบ (พูดแล้วข้อความจะขึ้นด้านล่าง):**")
         
         col_rec, col_area = st.columns([1, 3])
         
         with col_rec:
-            st.write("") # Spacer
+            st.write("") 
             st.write("")
             audio = mic_recorder(
                 start_prompt="🎙️ กดเพื่อพูด",
@@ -202,18 +264,15 @@ else:
             )
         
         with col_area:
-            # Logic แปลงเสียง
             if audio:
                 with st.spinner("กำลังแปลงเสียง..."):
                     text = transcribe_audio(audio['bytes'])
                     if text:
-                        # เอาข้อความใหม่ไปต่อท้ายข้อความเดิม
                         if st.session_state.report_text_buffer:
                             st.session_state.report_text_buffer += " " + text
                         else:
                             st.session_state.report_text_buffer = text
                         
-                        # Auto-tick logic (เพื่อความลื่นไหล)
                         if completed_count == 0:
                              checklist_status.add(my_missions.iloc[0]['topic'])
                         else:
@@ -221,13 +280,11 @@ else:
                         st.session_state.sales_checklist[target_cust] = checklist_status
                         st.rerun()
 
-            # กล่องข้อความ (Editable)
             final_report = st.text_area(
                 "แก้ไขข้อความรายงานได้ที่นี่:",
                 value=st.session_state.report_text_buffer,
                 height=100
             )
-            # อัปเดต Buffer ถ้ามีการพิมพ์แก้ด้วยมือ
             st.session_state.report_text_buffer = final_report
 
         # --- SUBMIT BUTTON ---
@@ -238,28 +295,24 @@ else:
             st.success("✅ ข้อมูลครบถ้วน!")
             if st.button("🚀 ปิดงาน (Save to Cloud)", type="primary"):
                 
-                # Prepare Data
                 topics_str = ", ".join(my_missions['topic'].tolist())
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-                # [UPDATED] เพิ่ม final_report ลงไปใน Column สุดท้าย
-                # Columns: Timestamp, Sales_Rep, Customer, Topics_Covered, Status, Report_Detail
                 report_row = [
                     timestamp, 
                     current_user, 
                     target_cust, 
                     topics_str, 
                     "Completed", 
-                    final_report # <--- ใส่ข้อความที่พูด/พิมพ์ลงไปตรงนี้
+                    final_report
                 ]
                 
                 append_data("Reports", report_row)
                 delete_mission_from_sheet(target_cust)
                 
-                # Clear Local State
                 if target_cust in st.session_state.sales_checklist:
                     del st.session_state.sales_checklist[target_cust]
-                st.session_state.report_text_buffer = "" # Clear text buffer
+                st.session_state.report_text_buffer = "" 
                 
                 st.toast("บันทึกเรียบร้อย!", icon="☁️")
                 time.sleep(2)
