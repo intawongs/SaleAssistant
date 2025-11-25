@@ -13,12 +13,13 @@ from groq import Groq
 st.set_page_config(page_title="RC Sales AI (Final)", layout="wide", page_icon="🚀")
 
 # ==========================================
-# 1. GOOGLE SHEETS CONNECTION
+# 1. GOOGLE SHEETS CONNECTION & CACHING
 # ==========================================
 SHEET_NAME = "RC_Sales_Database"
 
 @st.cache_resource
 def init_connection():
+    """เชื่อมต่อ Google Sheets"""
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
     client = gspread.authorize(creds)
@@ -26,6 +27,7 @@ def init_connection():
 
 @st.cache_data(ttl=60)
 def get_data(worksheet_name):
+    """อ่านข้อมูล (Cache 60 วินาที เพื่อป้องกัน Quota Exceeded)"""
     try:
         client = init_connection()
         sheet = client.open(SHEET_NAME)
@@ -39,6 +41,7 @@ def get_data(worksheet_name):
         return pd.DataFrame()
 
 def append_data(worksheet_name, row_data):
+    """บันทึกข้อมูลและล้าง Cache ทันที"""
     try:
         client = init_connection()
         sheet = client.open(SHEET_NAME)
@@ -49,6 +52,7 @@ def append_data(worksheet_name, row_data):
         st.error(f"Error saving data: {e}")
 
 def delete_mission_from_sheet(customer_name):
+    """ลบงานที่เสร็จแล้ว"""
     try:
         client = init_connection()
         sheet = client.open(SHEET_NAME)
@@ -65,56 +69,7 @@ def delete_mission_from_sheet(customer_name):
         st.error(f"Error deleting mission: {e}")
 
 # ==========================================
-# 2. AI TALKING POINTS (Groq)
-# ==========================================
-def generate_talking_points(customer_name, mission_df):
-    try:
-        if "GROQ_API_KEY" not in st.secrets:
-            return "⚠️ กรุณาใส่ GROQ_API_KEY ใน Secrets ก่อนครับ"
-
-        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-        
-        # รวบรวมโจทย์ (Mission)
-        tasks_text = ""
-        if not mission_df.empty:
-            tasks_list = [f"- {row['topic']}: {row['desc']}" for _, row in mission_df.iterrows()]
-            tasks_text = "\n".join(tasks_list)
-        else:
-            tasks_text = "ไม่มีโจทย์พิเศษ (เน้นสร้างความสัมพันธ์ทั่วไป)"
-
-        # Prompt ฉบับปรับปรุง
-        prompt = f"""
-        บทบาทของคุณ: คุณคือ "ผู้ช่วยส่วนตัวของเซลล์มืออาชีพ" (Professional Sales Assistant)
-        
-        สถานการณ์: เซลล์กำลังจะไปเยี่ยมลูกค้าชื่อ: "{customer_name}"
-        
-        โจทย์สำคัญ (Mission) วันนี้คือ:
-        {tasks_text}
-        
-        คำสั่ง:
-        ช่วยคิดบทพูดให้เซลล์ โดยต้อง **"ปรับน้ำเสียง (Tone)" ให้เข้ากับโจทย์**:
-        - ถ้าโจทย์คือเรื่องซีเรียส (ราคา, คู่แข่ง, สัญญา): ให้ใช้โทนจริงจัง มืออาชีพ น่าเชื่อถือ
-        - ถ้าโจทย์คือเรื่องความสัมพันธ์ (เชิญงานปีใหม่, กินข้าว, ตีกอล์ฟ): ให้ใช้โทนอบอุ่น เป็นกันเอง ให้เกียรติ และเชื้อเชิญ
-        
-        สิ่งที่ต้องการ (Output):
-        1. 🧊 Ice Breaker (1 ประโยค): ประโยคเปิดบทสนทนาที่เข้ากับสถานการณ์
-        2. 🎯 Key Talking Points (3 ข้อ): ประเด็นสำคัญที่ควรพูดเพื่อให้บรรลุโจทย์
-        
-        **ขอภาษาพูดคนไทยทำงานจริงๆ สั้น กระชับ ไม่ลิเก**
-        """
-        
-        completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            max_tokens=600
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        return f"AI Error: {str(e)}"
-
-# ==========================================
-# 3. VOICE FUNCTION (Audio Processing)
+# 2. VOICE TRANSCRIPTION (WebM -> WAV -> Text)
 # ==========================================
 def transcribe_audio(audio_bytes):
     r = sr.Recognizer()
@@ -131,6 +86,86 @@ def transcribe_audio(audio_bytes):
         return None
 
 # ==========================================
+# 3. AI LOGIC (Groq / Llama 3)
+# ==========================================
+
+# 3.1 ฟังก์ชันช่วยคิดบทพูด (Talking Points)
+def generate_talking_points(customer_name, mission_df):
+    try:
+        if "GROQ_API_KEY" not in st.secrets:
+            return "⚠️ กรุณาใส่ GROQ_API_KEY"
+
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        
+        tasks_text = ""
+        if not mission_df.empty:
+            tasks_list = [f"- {row['topic']}: {row['desc']}" for _, row in mission_df.iterrows()]
+            tasks_text = "\n".join(tasks_list)
+        else:
+            tasks_text = "เยี่ยมเยียนทั่วไป"
+
+        prompt = f"""
+        Role: ผู้ช่วยเซลล์มืออาชีพ
+        Customer: {customer_name}
+        Mission: {tasks_text}
+        
+        Output:
+        1. Ice Breaker (1 ประโยค): ทักทายเปิดบทสนทนา
+        2. Talking Points (3 ข้อ): ประเด็นที่จะคุยเพื่อให้บรรลุ Mission
+        (ปรับโทนเสียงตามบริบท: ถ้าเป็นงานเลี้ยงให้เน้นความสัมพันธ์, ถ้างานขายให้เน้นข้อมูล)
+        """
+        
+        completion = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=500
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        return f"AI Error: {str(e)}"
+
+# 3.2 [ใหม่] ฟังก์ชันตรวจการบ้าน (Strict Auditor)
+def validate_mission_compliance(topic, desc, report_text):
+    try:
+        if "GROQ_API_KEY" not in st.secrets:
+            return "⚠️ No Key", "gray"
+
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        
+        prompt = f"""
+        Role: คุณคือ "ผู้ตรวจสอบข้อมูล" (Strict Auditor) ที่ละเอียดรอบคอบ
+        Task: ตรวจสอบว่า "รายงานของเซลล์" ตอบโจทย์ "คำสั่ง" ได้ถูกต้องหรือไม่
+        
+        ---
+        คำสั่ง (Mission): {topic} ({desc})
+        รายงาน (Report): "{report_text}"
+        ---
+        
+        กฎการตัดสิน (Criteria):
+        1. **Timeframe:** ถ้าถามปีหน้า แต่ตอบปีนี้ -> FAIL
+        2. **Topic:** ถ้าถามราคา แต่ตอบจำนวน -> FAIL
+        3. **Completeness:** ถ้าตอบไม่ตรงคำถาม -> FAIL
+        
+        Output Format (ตอบบรรทัดเดียว):
+        [PASS/FAIL]: [เหตุผลสั้นๆ]
+        """
+        
+        completion = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0, # สำคัญ! ต้องเป็น 0 เพื่อความแม่นยำ
+            max_tokens=100
+        )
+        result = completion.choices[0].message.content
+        
+        if "PASS" in result: return result, "green"
+        else: return result, "red"
+            
+    except Exception as e:
+        return f"Error: {e}", "gray"
+
+# ==========================================
 # 4. LOAD DATA
 # ==========================================
 try:
@@ -139,22 +174,24 @@ try:
 except:
     st.stop()
 
+# State Management
 if 'report_text_buffer' not in st.session_state:
     st.session_state.report_text_buffer = ""
 if 'sales_checklist' not in st.session_state:
-    st.session_state.sales_checklist = {}
+    st.session_state.sales_checklist = set()
+if 'audit_results' not in st.session_state:
+    st.session_state.audit_results = {}
 
 # ==========================================
-# 5. UI & LOGIC
+# 5. UI ROUTING
 # ==========================================
 user_role = st.sidebar.radio("Login Role:", ("Sales Manager", "Sales Rep"))
 
 if st.sidebar.button("🔄 Refresh Data"):
     st.cache_data.clear()
-    if 'report_text_buffer' in st.session_state:
-        st.session_state.report_text_buffer = ""
-    if 'sales_checklist' in st.session_state:
-        st.session_state.sales_checklist = {}
+    st.session_state.report_text_buffer = ""
+    st.session_state.sales_checklist = set()
+    st.session_state.audit_results = {}
     st.rerun()
 
 # --- MANAGER ROLE ---
@@ -169,7 +206,6 @@ if user_role == "Sales Manager":
         with col1:
             sales_list = df_assignments['Sales_Rep'].unique() if not df_assignments.empty else []
             selected_sale = st.selectbox("Sales Rep", sales_list)
-            
             cust_list = []
             if not df_assignments.empty and selected_sale:
                 cust_list = df_assignments[df_assignments['Sales_Rep'] == selected_sale]['Customer'].unique()
@@ -193,7 +229,7 @@ if user_role == "Sales Manager":
             df_reports = get_data("Reports")
             st.dataframe(df_reports)
         except:
-            st.info("ยังไม่มีรายงานเข้ามา")
+            st.info("ยังไม่มีรายงาน")
 
 # --- SALES ROLE ---
 else:
@@ -203,7 +239,6 @@ else:
     sales_list = df_assignments['Sales_Rep'].unique() if not df_assignments.empty else []
     current_user = st.selectbox("👤 Login:", sales_list)
     
-    # 2. Select Customer
     my_custs = []
     if not df_assignments.empty and current_user:
         my_custs = df_assignments[df_assignments['Sales_Rep'] == current_user]['Customer'].unique()
@@ -211,98 +246,104 @@ else:
     st.divider()
     target_cust = st.selectbox("🏢 เลือกลูกค้าที่เข้าเยี่ยม:", my_custs)
     
-    # Logic รีเซ็ตกล่องข้อความเมื่อเปลี่ยนลูกค้า
+    # Logic รีเซ็ตเมื่อเปลี่ยนลูกค้า
     if 'last_cust' not in st.session_state:
         st.session_state.last_cust = target_cust
     if st.session_state.last_cust != target_cust:
         st.session_state.report_text_buffer = ""
+        st.session_state.sales_checklist = set()
+        st.session_state.audit_results = {}
         st.session_state.last_cust = target_cust
 
-    # 3. ดึง Mission มาเตรียมไว้
+    # 3. ดึง Mission
     my_missions = pd.DataFrame()
     if not df_missions.empty and 'Customer' in df_missions.columns:
         my_missions = df_missions[df_missions['Customer'] == target_cust]
 
-    # ==========================================
-    # [SECTION] AI Talking Points
-    # ==========================================
+    # [AI Talking Points]
     with st.expander("✨ ให้ AI ช่วยคิดบทพูด (Talking Points)", expanded=False):
         if st.button("💡 กดเพื่อให้ AI วิเคราะห์โจทย์"):
-            with st.spinner("AI กำลังวางแผนการขายให้คุณ..."):
+            with st.spinner("AI กำลังวางแผนการขาย..."):
                 ai_advice = generate_talking_points(target_cust, my_missions)
                 st.markdown(ai_advice)
     
     st.divider()
 
-    # 4. แสดงผล Checklist & อัดเสียง
+    # 4. Mission Checklist & Reporting Area
     if my_missions.empty:
         st.success("🎉 ไม่มีงานค้าง (All Clear)")
     else:
         st.subheader(f"📋 งานที่ต้องทำ: {target_cust}")
         
-        checklist_status = st.session_state.sales_checklist.get(target_cust, set())
-        completed_count = 0
+        # === ส่วนรายงานรวม (Voice/Text) ===
+        st.caption("🎙️ พูดรายงานรวม หรือพิมพ์ทีละข้อก็ได้")
         
-        for index, row in my_missions.iterrows():
-            topic = row['topic']
-            is_done = topic in checklist_status
-            icon = "✅" if is_done else "❌"
-            st.write(f"{icon} **{topic}**: {row['desc']}")
-            if is_done: completed_count += 1
-            
-        st.divider()
-        
-        # --- VOICE RECORDER ---
-        st.write("📝 **รายละเอียดการเข้าพบ (พูดแล้วข้อความจะขึ้นด้านล่าง):**")
-        
-        col_rec, col_area = st.columns([1, 3])
-        
-        with col_rec:
-            st.write("") 
+        col_mic, col_text = st.columns([1, 4])
+        with col_mic:
             st.write("")
-            audio = mic_recorder(
-                start_prompt="🎙️ กดเพื่อพูด",
-                stop_prompt="⏹️ หยุด (ส่ง)",
-                just_once=True,
-                use_container_width=True,
-                format="webm",
-                key="recorder"
-            )
+            audio = mic_recorder(start_prompt="🎙️ พูด", stop_prompt="⏹️ หยุด", key="main_mic", format="webm", use_container_width=True)
         
-        with col_area:
+        with col_text:
             if audio:
-                with st.spinner("กำลังแปลงเสียง..."):
+                with st.spinner("แปลงเสียง..."):
                     text = transcribe_audio(audio['bytes'])
                     if text:
                         if st.session_state.report_text_buffer:
                             st.session_state.report_text_buffer += " " + text
                         else:
                             st.session_state.report_text_buffer = text
-                        
-                        # Auto-tick logic
-                        if completed_count == 0:
-                             checklist_status.add(my_missions.iloc[0]['topic'])
-                        else:
-                             for _, r in my_missions.iterrows(): checklist_status.add(r['topic'])
-                        st.session_state.sales_checklist[target_cust] = checklist_status
-                        st.rerun()
+            
+            main_report_text = st.text_area("📝 รายงานผลรวม:", value=st.session_state.report_text_buffer, height=100)
+            st.session_state.report_text_buffer = main_report_text
 
-            final_report = st.text_area(
-                "แก้ไขข้อความรายงานได้ที่นี่:",
-                value=st.session_state.report_text_buffer,
-                height=100
-            )
-            st.session_state.report_text_buffer = final_report
-
-        # --- SUBMIT BUTTON ---
         st.divider()
-        if completed_count < len(my_missions):
-            st.warning(f"เหลืออีก {len(my_missions) - completed_count} ข้อ")
-        else:
-            st.success("✅ ข้อมูลครบถ้วน!")
-            if st.button("🚀 ปิดงาน (Save to Cloud)", type="primary"):
+
+        # === ส่วนตรวจสอบรายข้อ (Auditor) ===
+        checklist_status = st.session_state.sales_checklist
+        
+        for index, row in my_missions.iterrows():
+            topic = row['topic']
+            desc = row['desc']
+            is_done = topic in checklist_status
+            
+            icon = "✅" if is_done else "🔴"
+            
+            with st.expander(f"{icon} **{topic}**: {desc}", expanded=not is_done):
                 
-                topics_str = ", ".join(my_missions['topic'].tolist())
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    st.info(f"**ต้องทำ:** {desc}")
+                with c2:
+                    if st.button(f"🔍 ตรวจคำตอบ", key=f"chk_{index}"):
+                        if not main_report_text:
+                            st.warning("พูดรายงานก่อนครับ")
+                        else:
+                            with st.spinner("AI กำลังจับผิด..."):
+                                result, color = validate_mission_compliance(topic, desc, main_report_text)
+                                st.session_state.audit_results[topic] = (result, color)
+                                if color == "green":
+                                    checklist_status.add(topic)
+                                    st.session_state.sales_checklist = checklist_status
+                                    st.rerun()
+                
+                # Show Result
+                if topic in st.session_state.audit_results:
+                    res_text, res_color = st.session_state.audit_results[topic]
+                    if res_color == "green":
+                        st.success(res_text)
+                    else:
+                        st.error(res_text)
+
+        # === Submit ===
+        completed_count = len(checklist_status)
+        total_count = len(my_missions)
+        
+        st.write(f"**สถานะ:** {completed_count}/{total_count} ข้อ")
+        
+        if completed_count == total_count:
+            st.success("ครบถ้วน! ปิดงานได้เลย")
+            if st.button("🚀 ปิดงาน (Save & Clear)", type="primary"):
+                topics_str = ", ".join(checklist_status)
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 report_row = [
@@ -311,16 +352,20 @@ else:
                     target_cust, 
                     topics_str, 
                     "Completed", 
-                    final_report
+                    main_report_text
                 ]
                 
                 append_data("Reports", report_row)
                 delete_mission_from_sheet(target_cust)
                 
+                # Clear
                 if target_cust in st.session_state.sales_checklist:
-                    del st.session_state.sales_checklist[target_cust]
+                    del st.session_state.sales_checklist
                 st.session_state.report_text_buffer = "" 
+                st.session_state.audit_results = {}
                 
                 st.toast("บันทึกเรียบร้อย!", icon="☁️")
                 time.sleep(2)
                 st.rerun()
+        else:
+            st.warning("ต้องผ่านการตรวจสอบครบทุกข้อก่อน จึงจะปิดงานได้")
