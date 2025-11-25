@@ -233,10 +233,9 @@ if user_role == "Sales Manager":
 
 # --- SALES ROLE ---
 else:
-
     st.header("📱 Sales App")
     
-    # 1. Login & Filter
+    # 1. Login
     sales_list = df_assignments['Sales_Rep'].unique() if not df_assignments.empty else []
     current_user = st.selectbox("👤 Login:", sales_list)
     
@@ -247,106 +246,59 @@ else:
     st.divider()
     target_cust = st.selectbox("🏢 เลือกลูกค้าที่เข้าเยี่ยม:", my_custs)
     
-    # Logic รีเซ็ตค่าเมื่อเปลี่ยนลูกค้า
+    # Logic รีเซ็ตเมื่อเปลี่ยนลูกค้า
     if 'last_cust' not in st.session_state:
         st.session_state.last_cust = target_cust
-        
-    # ถ้ามีการเปลี่ยนลูกค้า ให้เคลียร์ค่าทุกอย่าง
     if st.session_state.last_cust != target_cust:
         st.session_state.report_text_buffer = ""
         st.session_state.sales_checklist = set()
         st.session_state.audit_results = {}
-        st.session_state.talking_points_cache = None # เคลียร์บทพูดเก่า
         st.session_state.last_cust = target_cust
 
+    # 3. ดึง Mission
     my_missions = pd.DataFrame()
     if not df_missions.empty and 'Customer' in df_missions.columns:
         my_missions = df_missions[df_missions['Customer'] == target_cust]
 
-    # ==========================================
-    # [AUTO] AI Talking Points (ทำงานอัตโนมัติ)
-    # ==========================================
-    st.write("🤖 **คำแนะนำจาก AI (Talking Points):**")
-    
-    # เช็คว่ามีของเก่าใน cache ไหม ถ้าไม่มีให้เจนใหม่
-    if 'talking_points_cache' not in st.session_state or st.session_state.talking_points_cache is None:
-        with st.spinner("AI กำลังวิเคราะห์โจทย์และเตรียมบทพูด..."):
-            ai_advice = generate_talking_points(target_cust, my_missions)
-            st.session_state.talking_points_cache = ai_advice
-    
-    # แสดงผลทันที
-    st.info(st.session_state.talking_points_cache)
+    # [AI Talking Points]
+    with st.expander("✨ ให้ AI ช่วยคิดบทพูด (Talking Points)", expanded=False):
+        if st.button("💡 กดเพื่อให้ AI วิเคราะห์โจทย์"):
+            with st.spinner("AI กำลังวางแผนการขาย..."):
+                ai_advice = generate_talking_points(target_cust, my_missions)
+                st.markdown(ai_advice)
     
     st.divider()
 
+    # 4. Mission Checklist & Reporting Area
     if my_missions.empty:
         st.success("🎉 ไม่มีงานค้าง (All Clear)")
     else:
         st.subheader(f"📋 งานที่ต้องทำ: {target_cust}")
         
-        # === 1. ส่วนอัดเสียง & ประมวลผลอัตโนมัติ ===
+        # === ส่วนรายงานรวม (Voice/Text) ===
+        st.caption("🎙️ พูดรายงานรวม หรือพิมพ์ทีละข้อก็ได้")
+        
         col_mic, col_text = st.columns([1, 4])
         with col_mic:
             st.write("")
             audio = mic_recorder(start_prompt="🎙️ พูด", stop_prompt="⏹️ หยุด", key="main_mic", format="webm", use_container_width=True)
         
         with col_text:
-            # Logic เมื่อพูดจบ
             if audio:
-                with st.spinner("กำลังแปลงเสียง และตรวจคำตอบอัตโนมัติ..."):
+                with st.spinner("แปลงเสียง..."):
                     text = transcribe_audio(audio['bytes'])
                     if text:
-                        # 1. อัปเดตข้อความ
                         if st.session_state.report_text_buffer:
                             st.session_state.report_text_buffer += " " + text
                         else:
                             st.session_state.report_text_buffer = text
-                        
-                        # 2. Auto-Audit: ตรวจทุกข้อทันที!
-                        current_report = st.session_state.report_text_buffer
-                        checklist_status = st.session_state.sales_checklist
-                        
-                        for index, row in my_missions.iterrows():
-                            topic = row['topic']
-                            desc = row['desc']
-                            
-                            # ส่งให้ AI ตรวจ
-                            result, color = validate_mission_compliance(topic, desc, current_report)
-                            st.session_state.audit_results[topic] = (result, color)
-                            
-                            # ถ้าผ่าน Auto-tick
-                            if color == "green":
-                                checklist_status.add(topic)
-                            else:
-                                if topic in checklist_status:
-                                    checklist_status.remove(topic)
-                        
-                        st.session_state.sales_checklist = checklist_status
-                        st.rerun()
             
-            # กล่องข้อความ
             main_report_text = st.text_area("📝 รายงานผลรวม:", value=st.session_state.report_text_buffer, height=100)
             st.session_state.report_text_buffer = main_report_text
-            
-            # ปุ่มตรวจมือ
-            if st.button("🔄 ตรวจสอบข้อความที่พิมพ์แก้ใหม่"):
-                with st.spinner("AI กำลังตรวจใหม่..."):
-                    checklist_status = st.session_state.sales_checklist
-                    for index, row in my_missions.iterrows():
-                        topic = row['topic']
-                        desc = row['desc']
-                        result, color = validate_mission_compliance(topic, desc, main_report_text)
-                        st.session_state.audit_results[topic] = (result, color)
-                        if color == "green":
-                            checklist_status.add(topic)
-                        elif topic in checklist_status:
-                            checklist_status.remove(topic)
-                    st.session_state.sales_checklist = checklist_status
-                    st.rerun()
 
         st.divider()
 
-        # === 2. แสดงผลการตรวจ ===
+        # === ส่วนตรวจสอบรายข้อ (Auditor) ===
         checklist_status = st.session_state.sales_checklist
         
         for index, row in my_missions.iterrows():
@@ -356,45 +308,64 @@ else:
             
             icon = "✅" if is_done else "🔴"
             
-            if topic in st.session_state.audit_results:
-                res_text, res_color = st.session_state.audit_results[topic]
-                display_text = res_text.replace("PASS:", "").replace("FAIL:", "").strip()
+            with st.expander(f"{icon} **{topic}**: {desc}", expanded=not is_done):
                 
-                if res_color == "green":
-                    st.success(f"**{topic}**: {display_text}")
-                else:
-                    st.error(f"**{topic}**: {display_text}")
-            else:
-                st.info(f"**{topic}**: รอข้อมูล... ({desc})")
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    st.info(f"**ต้องทำ:** {desc}")
+                with c2:
+                    if st.button(f"🔍 ตรวจคำตอบ", key=f"chk_{index}"):
+                        if not main_report_text:
+                            st.warning("พูดรายงานก่อนครับ")
+                        else:
+                            with st.spinner("AI กำลังจับผิด..."):
+                                result, color = validate_mission_compliance(topic, desc, main_report_text)
+                                st.session_state.audit_results[topic] = (result, color)
+                                if color == "green":
+                                    checklist_status.add(topic)
+                                    st.session_state.sales_checklist = checklist_status
+                                    st.rerun()
+                
+                # Show Result
+                if topic in st.session_state.audit_results:
+                    res_text, res_color = st.session_state.audit_results[topic]
+                    if res_color == "green":
+                        st.success(res_text)
+                    else:
+                        st.error(res_text)
 
         # === Submit ===
         completed_count = len(checklist_status)
         total_count = len(my_missions)
         
-        st.write(f"---")
-        col_status, col_btn = st.columns([3, 1])
-        with col_status:
-            st.caption(f"ความคืบหน้า: {completed_count}/{total_count}")
-            st.progress(completed_count / total_count if total_count > 0 else 0)
+        st.write(f"**สถานะ:** {completed_count}/{total_count} ข้อ")
         
-        with col_btn:
-            if completed_count == total_count:
-                if st.button("🚀 ปิดงาน", type="primary", use_container_width=True):
-                    topics_str = ", ".join(checklist_status)
-                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    report_row = [timestamp, current_user, target_cust, topics_str, "Completed", main_report_text]
-                    
-                    append_data("Reports", report_row)
-                    delete_mission_from_sheet(target_cust)
-                    
-                    if target_cust in st.session_state.sales_checklist:
-                        del st.session_state.sales_checklist[target_cust]
-                    st.session_state.report_text_buffer = "" 
-                    st.session_state.audit_results = {}
-                    st.session_state.talking_points_cache = None # เคลียร์ cache ของ AI Talking Point
-                    
-                    st.toast("บันทึกเรียบร้อย!", icon="☁️")
-                    time.sleep(2)
-                    st.rerun()
-            else:
-                st.button("🔒 ปิดงาน", disabled=True, use_container_width=True, help="ต้องผ่านทุกข้อก่อน")
+        if completed_count == total_count:
+            st.success("ครบถ้วน! ปิดงานได้เลย")
+            if st.button("🚀 ปิดงาน (Save & Clear)", type="primary"):
+                topics_str = ", ".join(checklist_status)
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                report_row = [
+                    timestamp, 
+                    current_user, 
+                    target_cust, 
+                    topics_str, 
+                    "Completed", 
+                    main_report_text
+                ]
+                
+                append_data("Reports", report_row)
+                delete_mission_from_sheet(target_cust)
+                
+                # Clear
+                if target_cust in st.session_state.sales_checklist:
+                    del st.session_state.sales_checklist
+                st.session_state.report_text_buffer = "" 
+                st.session_state.audit_results = {}
+                
+                st.toast("บันทึกเรียบร้อย!", icon="☁️")
+                time.sleep(2)
+                st.rerun()
+        else:
+            st.warning("ต้องผ่านการตรวจสอบครบทุกข้อก่อน จึงจะปิดงานได้")
