@@ -74,20 +74,43 @@ def transcribe_audio(audio_bytes):
             return text
     except: return None
 
+# ==========================================
+# [FIXED] ฟังก์ชันแยกแยะวันที่ (รองรับปี 2 หลัก + เวลาไทย)
+# ==========================================
 def get_task_status_by_date(topic_str):
     try:
         if not isinstance(topic_str, str): return 'today'
-        today = datetime.date.today()
         
-        # 1. หา Pattern ตัวเลข (เช่น 27/11/2568)
-        match_digit = re.search(r"(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{4})", topic_str)
+        # 1. ตั้งค่า "วันนี้" เป็นเวลาไทย (GMT+7)
+        tz = datetime.timezone(datetime.timedelta(hours=7))
+        today = datetime.datetime.now(tz).date()
+        
+        # 2. หา Pattern ตัวเลข (รองรับปี 2-4 หลัก)
+        # จับรูปแบบ: d/m/yy หรือ d-m-yy (เช่น 27/11/68, 27-11-2568)
+        match_digit = re.search(r"(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{2,4})", topic_str)
+        
         if match_digit:
             d, m, y = map(int, match_digit.groups())
-            if y > 2400: y -= 543 # แปลง พ.ศ. เป็น ค.ศ. เพื่อเทียบ
-            task_date = datetime.date(y, m, d)
-            return 'future' if task_date > today else 'today'
+            
+            # Logic แปลงปี:
+            if y > 2400: 
+                # กรณีปีเต็ม พ.ศ. (2568) -> ลบ 543 เป็น ค.ศ.
+                y -= 543
+            elif y < 100: 
+                # กรณีปีย่อ (68) -> ตีว่าเป็น พ.ศ. 25xx -> บวก 1957 เป็น ค.ศ. (2500-543=1957)
+                # (เช่น 68 + 1957 = 2025)
+                # แต่ถ้าเลขน้อยๆ เช่น 25 อาจจะเป็น ค.ศ. 2025 ก็ได้ (กันเหนียว)
+                if y > 40: y += 1957 
+                else: y += 2000
+            
+            try:
+                task_date = datetime.date(y, m, d)
+                # เทียบกับวันนี้
+                return 'future' if task_date > today else 'today'
+            except:
+                return 'today'
 
-        # 2. หา Pattern ภาษาไทย
+        # 3. หา Pattern ภาษาไทย (เหมือนเดิม)
         match_thai = re.search(r"(\d{1,2})\s+([ก-๙.]+)", topic_str)
         if match_thai:
             day = int(match_thai.group(1))
@@ -104,6 +127,7 @@ def get_task_status_by_date(topic_str):
                     task_date = datetime.date(year, month, day)
                     return 'future' if task_date > today else 'today'
                 except: return 'today'
+                
         return 'today'
     except: return 'today'
 
