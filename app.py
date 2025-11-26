@@ -74,22 +74,33 @@ def transcribe_audio(audio_bytes):
     except: return None
 
 # [ฟังก์ชันแยกงาน วันนี้ vs อนาคต ยังคงใช้ Logic Python เดิมเพราะแม่นยำเรื่องการเปรียบเทียบวัน]
+
 # ==========================================
-# [FIXED] ฟังก์ชันแยกแยะวันที่ (รองรับ / และ ปี ค.ศ.)
+# [FIXED] ฟังก์ชันแยกแยะวันที่ (ฉลาดขึ้น + รองรับทุก Format)
 # ==========================================
 def get_task_status_by_date(topic_str):
     try:
+        if not isinstance(topic_str, str): return 'today'
+        
         today = datetime.date.today()
         
-        # 1. ลองหาแบบมีเครื่องหมาย / (เช่น 27/11/2025)
-        match_slash = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", topic_str)
-        if match_slash:
-            d, m, y = map(int, match_slash.groups())
+        # 1. หา Pattern ตัวเลข (รองรับ / และ - และเว้นวรรค)
+        # ตัวอย่างที่จับได้: 27/11/2025, 27-11-2025, 27 / 11 / 2025
+        match_digit = re.search(r"(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{4})", topic_str)
+        
+        if match_digit:
+            d, m, y = map(int, match_digit.groups())
+            
+            # เช็คปี พ.ศ. (ถ้ามากกว่า 2400 เดาว่าเป็น พ.ศ. ให้ลบ 543)
+            if y > 2400: y -= 543
+            
             task_date = datetime.date(y, m, d)
             return 'future' if task_date > today else 'today'
 
-        # 2. ลองหาแบบภาษาไทย (เช่น 27 พ.ย.)
-        match_thai = re.search(r"\(\s*(\d+)\s+([ก-๙.]+)\s*\)", topic_str)
+        # 2. หา Pattern ภาษาไทย (รองรับวงเล็บและไม่วงเล็บ)
+        # ตัวอย่างที่จับได้: 27 พ.ย., 27 พฤศจิกายน
+        match_thai = re.search(r"(\d{1,2})\s+([ก-๙.]+)", topic_str)
+        
         if match_thai:
             day = int(match_thai.group(1))
             month_str = match_thai.group(2)
@@ -107,18 +118,21 @@ def get_task_status_by_date(topic_str):
             
             if month > 0:
                 year = today.year
-                # ถ้าเดือนในโจทย์ น้อยกว่าเดือนปัจจุบัน (เช่น ตอนนี้ธันวา สั่งงานมกรา) ให้ปัดเป็นปีหน้า
+                # Logic ข้ามปี: ถ้าเดือนในโจทย์ น้อยกว่าเดือนปัจจุบัน (เช่น ตอนนี้ธันวา สั่งงานมกรา)
                 if month < today.month: year += 1
                 
-                task_date = datetime.date(year, month, day)
-                return 'future' if task_date > today else 'today'
+                try:
+                    task_date = datetime.date(year, month, day)
+                    return 'future' if task_date > today else 'today'
+                except ValueError:
+                    return 'today' # วันที่ผิด (เช่น 30 ก.พ.) ให้ทำเลย
 
         # 3. ถ้าหาไม่เจอเลย
         return 'today'
         
     except Exception as e:
+        # st.error(f"Date Parse Error: {e}") # เปิดบรรทัดนี้ถ้าอยากเห็น Error
         return 'today'
-
 # ==========================================
 # 3. AI LOGIC (Groq) - ปรับปรุงใหม่
 # ==========================================
