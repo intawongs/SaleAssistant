@@ -175,8 +175,10 @@ try:
     df_missions = get_data("Missions")
 except: st.stop()
 
+# [FIXED] Initialize Session State ให้ครบทุกตัว
 if 'report_text_buffer' not in st.session_state: st.session_state.report_text_buffer = ""
 if 'mission_results' not in st.session_state: st.session_state.mission_results = {} 
+if 'talking_points_cache' not in st.session_state: st.session_state.talking_points_cache = None # <--- ตัวปัญหา แก้แล้ว
 
 # ==========================================
 # 5. UI ROUTING
