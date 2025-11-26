@@ -74,32 +74,50 @@ def transcribe_audio(audio_bytes):
     except: return None
 
 # [ฟังก์ชันแยกงาน วันนี้ vs อนาคต ยังคงใช้ Logic Python เดิมเพราะแม่นยำเรื่องการเปรียบเทียบวัน]
+# ==========================================
+# [FIXED] ฟังก์ชันแยกแยะวันที่ (รองรับ / และ ปี ค.ศ.)
+# ==========================================
 def get_task_status_by_date(topic_str):
-    import re
     try:
-        # หา Pattern (7 ธ.ค.) หรือ (1 มกราคม)
-        match = re.search(r"\(\s*(\d+)\s+([ก-๙.]+)\s*\)", topic_str)
-        if not match: return 'today' # ไม่ระบุวัน = ทำเลย
-        
-        day = int(match.group(1))
-        month_str = match.group(2)
-        
-        thai_months = {"ม.ค.":1,"มกราคม":1,"ก.พ.":2,"กุมภาพันธ์":2,"มี.ค.":3,"มีนาคม":3,"เม.ย.":4,"เมษายน":4,"พ.ค.":5,"พฤษภาคม":5,"มิ.ย.":6,"มิถุนายน":6,"ก.ค.":7,"กรกฎาคม":7,"ส.ค.":8,"สิงหาคม":8,"ก.ย.":9,"กันยายน":9,"ต.ค.":10,"ตุลาคม":10,"พ.ย.":11,"พฤศจิกายน":11,"ธ.ค.":12,"ธันวาคม":12}
-        
-        month = 0
-        for k,v in thai_months.items():
-            if k in month_str: month = v; break
-        if month == 0: return 'today'
-
         today = datetime.date.today()
-        year = today.year
-        # ถ้าเดือนที่ระบุ น้อยกว่าเดือนปัจจุบัน (เช่น ตอนนี้ธันวา สั่งงานมกรา) ให้ปัดเป็นปีหน้า
-        if month < today.month: year += 1
         
-        task_date = datetime.date(year, month, day)
+        # 1. ลองหาแบบมีเครื่องหมาย / (เช่น 27/11/2025)
+        match_slash = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", topic_str)
+        if match_slash:
+            d, m, y = map(int, match_slash.groups())
+            task_date = datetime.date(y, m, d)
+            return 'future' if task_date > today else 'today'
+
+        # 2. ลองหาแบบภาษาไทย (เช่น 27 พ.ย.)
+        match_thai = re.search(r"\(\s*(\d+)\s+([ก-๙.]+)\s*\)", topic_str)
+        if match_thai:
+            day = int(match_thai.group(1))
+            month_str = match_thai.group(2)
+            
+            thai_months = {
+                "ม.ค.":1,"มกราคม":1,"ก.พ.":2,"กุมภาพันธ์":2,"มี.ค.":3,"มีนาคม":3,"เม.ย.":4,"เมษายน":4,"พ.ค.":5,"พฤษภาคม":5,"มิ.ย.":6,"มิถุนายน":6,
+                "ก.ค.":7,"กรกฎาคม":7,"ส.ค.":8,"สิงหาคม":8,"ก.ย.":9,"กันยายน":9,"ต.ค.":10,"ตุลาคม":10,"พ.ย.":11,"พฤศจิกายน":11,"ธ.ค.":12,"ธันวาคม":12
+            }
+            
+            month = 0
+            for k,v in thai_months.items():
+                if k in month_str: 
+                    month = v
+                    break
+            
+            if month > 0:
+                year = today.year
+                # ถ้าเดือนในโจทย์ น้อยกว่าเดือนปัจจุบัน (เช่น ตอนนี้ธันวา สั่งงานมกรา) ให้ปัดเป็นปีหน้า
+                if month < today.month: year += 1
+                
+                task_date = datetime.date(year, month, day)
+                return 'future' if task_date > today else 'today'
+
+        # 3. ถ้าหาไม่เจอเลย
+        return 'today'
         
-        return 'future' if task_date > today else 'today'
-    except: return 'today'
+    except Exception as e:
+        return 'today'
 
 # ==========================================
 # 3. AI LOGIC (Groq) - ปรับปรุงใหม่
