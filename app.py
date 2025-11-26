@@ -156,27 +156,29 @@ def summarize_voice_report(raw_text, customer_name, mission_df):
 # 3.2 Auto-Followup (คำนวณวันพรุ่งนี้ + Format หัวข้อเป๊ะๆ)
 # ==========================================
 # ==========================================
-# 3.2 Auto-Followup (Format สวย: Follow up d/m/yy Customer Detail)
+# 3.2 Auto-Followup (Fix: ห้ามเดาวันมั่ว ถ้าไม่เจอ Keyword ให้ไปเดือนหน้า)
 # ==========================================
 def create_followup_mission(customer, report_text, original_topic):
     try:
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
-        # 1. คำนวณเวลาไทย (GMT+7)
+        # 1. คำนวณเวลาไทย
         tz = datetime.timezone(datetime.timedelta(hours=7))
         now = datetime.datetime.now(tz)
         
-        # Helper: แปลงเป็นสตริงไทยแบบย่อ (d/m/yy เช่น 27/11/68)
+        # Helper: แปลงวันที่
         def to_short_thai_date(dt):
-            year_short = str(dt.year + 543)[-2:] # เอาแค่ 2 หลักท้าย
+            year_short = str(dt.year + 543)[-2:] 
             return f"{dt.day}/{dt.month}/{year_short}"
 
-        # คำนวณวันต่างๆ รอไว้
-        today_str = f"วัน{['จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์','อาทิตย์'][now.weekday()]}ที่ {to_short_thai_date(now)}"
+        today_str = to_short_thai_date(now)
         tomorrow_str = to_short_thai_date(now + datetime.timedelta(days=1))
-        next_week_str = to_short_thai_date(now + datetime.timedelta(days=7))
         
-        # เดือนหน้า
+        # คำนวณวันในสัปดาห์
+        days_map = {0:"จันทร์", 1:"อังคาร", 2:"พุธ", 3:"พฤหัส", 4:"ศุกร์", 5:"เสาร์", 6:"อาทิตย์"}
+        today_day_name = days_map[now.weekday()]
+        
+        # คำนวณเดือนหน้า
         try:
             next_month_date = now.replace(month=now.month+1)
         except ValueError:
@@ -185,33 +187,36 @@ def create_followup_mission(customer, report_text, original_topic):
         next_month_str = to_short_thai_date(next_month_date)
         
         prompt = f"""
-        Role: เลขาส่วนตัวที่จัดตารางงานเก่งที่สุด
+        Role: ระบบ Scheduler ที่ทำงานตามคำสั่งเคร่งครัด (Robot Logic)
         
-        📅 โพยวันที่ (Reference):
-        - วันนี้: {today_str}
+        📅 Reference Data:
+        - วันนี้คือ: วัน{today_day_name}ที่ {today_str}
         - พรุ่งนี้: {tomorrow_str}
-        - สัปดาห์หน้า: {next_week_str}
         - เดือนหน้า: {next_month_str}
         
         Input Data:
-        - Customer: "{customer}"
         - Report: "{report_text}"
-        - Original Topic: "{original_topic}"
+        - Customer: "{customer}"
+        - Detail: "{original_topic}"
         
-        ภารกิจ: สร้างงานใหม่ (`create`: true)
+        ภารกิจ: สร้าง Topic งานใหม่ โดยเลือกวันที่ตามกฎ Keyword Matching เท่านั้น:
         
-        🔥 FORMAT RULE (จัดรูปแบบตามนี้เป๊ะๆ ห้ามมีวงเล็บ):
-        "Follow up [วันที่] [ชื่อลูกค้า] [สิ่งที่ต้องทำ]"
+        🔥 KEYWORD RULES (ห้ามใช้ความรู้สึก ให้หาคำเป๊ะๆ):
         
-        ตัวอย่างที่ถูกต้อง:
-        ✅ "Follow up {tomorrow_str} Tropical Canning นัดคอนเฟิร์มออเดอร์"
-        ✅ "Follow up {next_month_str} Asian Sea ติดตามผลประจำเดือน"
+        1. **กรณีเจอคำว่า "พรุ่งนี้"**:
+           -> ต้องมีคำว่า "พรุ่งนี้" ในข้อความเท่านั้น ถึงจะใช้ {tomorrow_str} ได้
+           
+        2. **กรณีเจอ "ชื่อวัน" (จันทร์หน้า, ศุกร์นี้)**:
+           -> ให้คำนวณวันจาก "วันนี้คือวัน{today_day_name}"
+           
+        3. **กรณีเจอ "วันที่" (7 ธ.ค., วันที่ 15)**:
+           -> ใช้ d/m/yy (พ.ศ. 2 หลัก) ตามที่เจอ
+           
+        4. **กรณีไม่เจอคำระบุเวลาเลย (Default)**:
+           -> **ห้ามเดา!** ห้ามคิดว่าเร่งด่วน
+           -> ให้ใช้ **"{next_month_str}"** (เดือนหน้า) ทันที
         
-        🔥 Date Logic (เพื่อเอาไปใส่ในช่อง [วันที่]):
-        1. เจอ "พรุ่งนี้" -> ใช้ {tomorrow_str}
-        2. เจอ "วันจันทร์หน้า/ศุกร์หน้า" -> คำนวณจากวันนี้ ({today_str})
-        3. เจอวันที่ชัดเจน (เช่น 7 ธ.ค.) -> ใช้ d/m/yy (68)
-        4. ไม่เจอเวลา -> ใช้ {next_month_str}
+        Format: "Follow up {next_month_str} {customer} [รายละเอียด]"
         
         Output JSON: {{ "create": true, "topic": "...", "desc": "...", "status": "pending" }}
         """
@@ -219,12 +224,12 @@ def create_followup_mission(customer, report_text, original_topic):
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile", 
             messages=[{"role": "user", "content": prompt}], 
-            temperature=0.1, 
+            temperature=0.0, # Zero Creativity
             response_format={"type": "json_object"}
         )
         return json.loads(completion.choices[0].message.content)
     except:
-        return {"create": True, "topic": "Follow up (Auto)", "desc": "System Auto-Gen", "status": "pending"}
+        return {"create": True, "topic": "Follow up Auto", "desc": "System Auto-Gen", "status": "pending"}
 
 # 3.3 AI Coach
 def generate_talking_points(customer, mission_df):
