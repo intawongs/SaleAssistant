@@ -156,82 +156,75 @@ def summarize_voice_report(raw_text, customer_name, mission_df):
 # 3.2 Auto-Followup (คำนวณวันพรุ่งนี้ + Format หัวข้อเป๊ะๆ)
 # ==========================================
 # ==========================================
-# 3.2 Auto-Followup (รองรับ วันในสัปดาห์: จันทร์หน้า/ศุกร์นี้)
+# 3.2 Auto-Followup (Format สวย: Follow up d/m/yy Customer Detail)
 # ==========================================
 def create_followup_mission(customer, report_text, original_topic):
     try:
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
-        # 1. คำนวณเวลาปัจจุบัน (Thailand)
+        # 1. คำนวณเวลาไทย (GMT+7)
         tz = datetime.timezone(datetime.timedelta(hours=7))
         now = datetime.datetime.now(tz)
         
-        # แปลงเป็นชื่อวันภาษาไทย (จันทร์, อังคาร...)
-        thai_days = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
-        day_name = thai_days[now.weekday()] # 0=Mon, 6=Sun
-        
-        # Helper: แปลงเป็นสตริงไทย
-        def to_thai_date(dt):
-            return f"{dt.day}/{dt.month}/{dt.year + 543}"
+        # Helper: แปลงเป็นสตริงไทยแบบย่อ (d/m/yy เช่น 27/11/68)
+        def to_short_thai_date(dt):
+            year_short = str(dt.year + 543)[-2:] # เอาแค่ 2 หลักท้าย
+            return f"{dt.day}/{dt.month}/{year_short}"
 
-        today_str = f"วัน{day_name}ที่ {to_thai_date(now)}" # เช่น วันพุธที่ 26/11/2568
-        tomorrow_str = to_thai_date(now + datetime.timedelta(days=1))
-        next_week_str = to_thai_date(now + datetime.timedelta(days=7))
+        # คำนวณวันต่างๆ รอไว้
+        today_str = f"วัน{['จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์','อาทิตย์'][now.weekday()]}ที่ {to_short_thai_date(now)}"
+        tomorrow_str = to_short_thai_date(now + datetime.timedelta(days=1))
+        next_week_str = to_short_thai_date(now + datetime.timedelta(days=7))
         
-        # คำนวณเดือนหน้า
+        # เดือนหน้า
         try:
             next_month_date = now.replace(month=now.month+1)
         except ValueError:
-            if now.month == 12:
-                next_month_date = now.replace(year=now.year+1, month=1)
-            else:
-                next_month_date = now.replace(month=now.month+1, day=28)
-        next_month_str = to_thai_date(next_month_date)
+            if now.month == 12: next_month_date = now.replace(year=now.year+1, month=1)
+            else: next_month_date = now.replace(month=now.month+1, day=28)
+        next_month_str = to_short_thai_date(next_month_date)
         
         prompt = f"""
-        Role: ระบบ Scheduler อัจฉริยะ
+        Role: เลขาส่วนตัวที่จัดตารางงานเก่งที่สุด
         
-        📅 Reference Context (บริบทเวลา):
-        - วันนี้คือ: {today_str}  <-- (ใช้คำนวณวันในสัปดาห์)
+        📅 โพยวันที่ (Reference):
+        - วันนี้: {today_str}
         - พรุ่งนี้: {tomorrow_str}
         - สัปดาห์หน้า: {next_week_str}
         - เดือนหน้า: {next_month_str}
         
-        Input:
-        - Report: "{report_text}"
-        - Topic เดิม: "{original_topic}"
+        Input Data:
         - Customer: "{customer}"
+        - Report: "{report_text}"
+        - Original Topic: "{original_topic}"
         
-        ภารกิจ: สร้างงานใหม่ (`create`: true) เลือกวันนัดหมายตามลำดับ:
+        ภารกิจ: สร้างงานใหม่ (`create`: true)
         
-        🔥 Priority Rules:
-        1. **เจอวันที่ชัดเจน** (7 ธ.ค., 15 มกรา): -> ใช้ d/m/yyyy (พ.ศ.)
+        🔥 FORMAT RULE (จัดรูปแบบตามนี้เป๊ะๆ ห้ามมีวงเล็บ):
+        "Follow up [วันที่] [ชื่อลูกค้า] [สิ่งที่ต้องทำ]"
         
-        2. **เจอวันในสัปดาห์** (เช่น "อังคารหน้า", "ศุกร์นี้", "วันจันทร์"):
-           - ให้คำนวณจาก "วันนี้คือ {today_str}" แล้วหาวันที่ที่เป็นวันนั้น
-           - ตัวอย่าง: ถ้าวันนี้พุธ 26 -> อังคารหน้าคือ 2 ธ.ค.
-           - Topic: "Follow up (อังคารหน้า [ใส่วันที่ที่คำนวณได้]): {original_topic}"
-
-        3. **เจอคำว่า "พรุ่งนี้"**: -> ใช้ค่า {tomorrow_str}
+        ตัวอย่างที่ถูกต้อง:
+        ✅ "Follow up {tomorrow_str} Tropical Canning นัดคอนเฟิร์มออเดอร์"
+        ✅ "Follow up {next_month_str} Asian Sea ติดตามผลประจำเดือน"
         
-        4. **เจอคำว่า "สัปดาห์หน้า"**: -> ใช้ค่า {next_week_str}
-           
-        5. **เจอแค่ "ชื่อเดือน"**: -> ใช้วันที่ 1 ของเดือนนั้น
-           
-        6. **ไม่เจอเวลา/ทั่วไป**: -> ใช้ค่า {next_month_str} (เดือนหน้า)
+        🔥 Date Logic (เพื่อเอาไปใส่ในช่อง [วันที่]):
+        1. เจอ "พรุ่งนี้" -> ใช้ {tomorrow_str}
+        2. เจอ "วันจันทร์หน้า/ศุกร์หน้า" -> คำนวณจากวันนี้ ({today_str})
+        3. เจอวันที่ชัดเจน (เช่น 7 ธ.ค.) -> ใช้ d/m/yy (68)
+        4. ไม่เจอเวลา -> ใช้ {next_month_str}
         
         Output JSON: {{ "create": true, "topic": "...", "desc": "...", "status": "pending" }}
         """
         
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile", # ตัว 70B เก่งเรื่อง Logic วันที่มาก
+            model="llama-3.3-70b-versatile", 
             messages=[{"role": "user", "content": prompt}], 
-            temperature=0.0, 
+            temperature=0.1, 
             response_format={"type": "json_object"}
         )
         return json.loads(completion.choices[0].message.content)
     except:
-        return {"create": True, "topic": "Monthly Visit (Auto)", "desc": "System Auto-Gen", "status": "pending"}
+        return {"create": True, "topic": "Follow up (Auto)", "desc": "System Auto-Gen", "status": "pending"}
 
 # 3.3 AI Coach
 def generate_talking_points(customer, mission_df):
