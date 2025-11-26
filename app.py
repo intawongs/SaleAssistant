@@ -108,52 +108,47 @@ def generate_talking_points(customer_name, mission_df):
 
 # 3.2 [ใหม่] สร้างตัวเลือกคำตอบอัตโนมัติ (Dynamic Options)
 # ==========================================
-# 3.2 [UPDATED] สร้างตัวเลือกคำตอบอัตโนมัติ (เน้นมุมมองลูกค้า)
+# ==========================================
+# 3.2 [FINAL SIMPLE] สร้างตัวเลือกคำตอบอัตโนมัติ (ให้ AI คิดเองเลย)
 # ==========================================
 @st.cache_data(show_spinner=False)
 def get_dynamic_options(topic, desc):
     try:
-        if "GROQ_API_KEY" not in st.secrets: return ["✅ ดี/ปกติ", "⚠️ กระทบปานกลาง", "❌ กระทบหนัก/แย่"]
+        if "GROQ_API_KEY" not in st.secrets: return ["✅ สำเร็จ/ดี", "⏳ รอสรุป/กลางๆ", "❌ ปฏิเสธ/แย่"]
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
         prompt = f"""
-        Role: Sales Expert creating a checklist.
-        Task: สร้างตัวเลือกคำตอบ (Checklist) 3 ข้อ สำหรับให้เซลล์ติ๊กหลังจากถามลูกค้าเรื่อง "{topic}" ({desc})
+        Task: สร้างตัวเลือกคำตอบ 3 ข้อ สำหรับให้เซลล์ติ๊กรายงานผลเรื่อง "{topic}"
         
-        Constraint (สำคัญมาก):
-        - ตัวเลือกต้องเป็น **"สิ่งที่ลูกค้าตอบ"** หรือ **"สถานการณ์จริงของลูกค้า"** (Customer Reaction)
-        - **ห้าม** เอาทฤษฎีเศรษฐศาสตร์มาตอบ
-        - ภาษา: ไทย (สั้น กระชับ แบบภาษาพูดเซลล์)
+        คำสั่ง:
+        ขอ 3 ตัวเลือกที่เป็นไปได้มากที่สุด เรียงลำดับดังนี้:
+        1. ทางบวก (สำเร็จ / ตกลง / ไม่กระทบ / ดี)
+        2. ทางกลาง (รอสรุป / ลังเล / ปานกลาง)
+        3. ทางลบ (ปฏิเสธ / เลื่อน / กระทบหนัก / แย่)
         
-        Structure (3 ตัวเลือก):
-        1. Positive/No Problem (ลูกค้าโอเค/ไม่กระทบ/ได้ประโยชน์)
-        2. Neutral/Wait (รอดูก่อน/กระทบนิดหน่อย)
-        3. Negative/Problem (ลูกค้าบ่น/กระทบหนัก/ชะลอซื้อ)
-        
-        Example Case:
-        Input: ค่าเงินบาทแข็ง
-        Output: ไม่กระทบ(ทำ Forward ไว้), กระทบนิดหน่อย, กระทบหนัก(กำไรหาย)
-        
-        Input: สินค้าใหม่
-        Output: สนใจสั่งเลย, ขอตัวอย่างลองก่อน, ไม่สนใจ/แพงไป
-        
-        Real Input: {topic}
-        Output Format: Just 3 options separated by comma (,)
+        Output Format: ขอแค่ข้อความภาษาไทยสั้นๆ คั่นด้วย comma (,) ห้ามมีเลขข้อ
+        ตัวอย่าง: ยืนยันออเดอร์, ขอคิดดูก่อน, ยังไม่สั่งซื้อ
         """
         
         completion = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+            temperature=0.3, # เพิ่มความคิดสร้างสรรค์นิดนึงให้เข้ากับบริบท
             max_tokens=60
         )
         options = completion.choices[0].message.content.split(',')
         clean_options = [opt.strip() for opt in options if opt.strip()]
         
-        if len(clean_options) < 3: return ["✅ ลูกค้าโอเค/ไม่กระทบ", "⚠️ กระทบปานกลาง", "❌ กระทบหนัก/ชะลอออเดอร์"]
-        return clean_options
+        # ใส่ Emoji อัตโนมัติเพื่อความสวยงาม
+        if len(clean_options) >= 3:
+            clean_options[0] = "✅ " + clean_options[0].replace("✅", "")
+            clean_options[1] = "⏳ " + clean_options[1].replace("⏳", "")
+            clean_options[2] = "❌ " + clean_options[2].replace("❌", "")
+            return clean_options[:3]
+            
+        return ["✅ สำเร็จ/ดี", "⏳ รอสรุป/กลางๆ", "❌ ปฏิเสธ/แย่"]
     except:
-        return ["✅ ลูกค้าโอเค/ไม่กระทบ", "⚠️ กระทบปานกลาง", "❌ กระทบหนัก/ชะลอออเดอร์"]
+        return ["✅ สำเร็จ/ดี", "⏳ รอสรุป/กลางๆ", "❌ ปฏิเสธ/แย่"]
 
 # 3.3 สร้างงานติดตามผลอัตโนมัติ (Auto-Followup)
 # ==========================================
