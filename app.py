@@ -10,7 +10,7 @@ import io
 from pydub import AudioSegment
 from groq import Groq
 
-st.set_page_config(page_title="RC Sales AI (Final)", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="RC Sales AI (Ultimate)", layout="wide", page_icon="🚀")
 
 # ==========================================
 # 1. GOOGLE SHEETS CONNECTION & CACHING
@@ -27,7 +27,7 @@ def init_connection():
 
 @st.cache_data(ttl=60)
 def get_data(worksheet_name):
-    """อ่านข้อมูล (Cache 60 วินาที เพื่อป้องกัน Quota Exceeded)"""
+    """อ่านข้อมูล (Cache 60 วินาที)"""
     try:
         client = init_connection()
         sheet = client.open(SHEET_NAME)
@@ -41,7 +41,7 @@ def get_data(worksheet_name):
         return pd.DataFrame()
 
 def append_data(worksheet_name, row_data):
-    """บันทึกข้อมูลและล้าง Cache ทันที"""
+    """บันทึกข้อมูลและล้าง Cache"""
     try:
         client = init_connection()
         sheet = client.open(SHEET_NAME)
@@ -69,7 +69,7 @@ def delete_mission_from_sheet(customer_name):
         st.error(f"Error deleting mission: {e}")
 
 # ==========================================
-# 2. VOICE TRANSCRIPTION (WebM -> WAV -> Text)
+# 2. VOICE TRANSCRIPTION
 # ==========================================
 def transcribe_audio(audio_bytes):
     r = sr.Recognizer()
@@ -89,7 +89,7 @@ def transcribe_audio(audio_bytes):
 # 3. AI LOGIC (Groq / Llama 3)
 # ==========================================
 
-# 3.1 ฟังก์ชันช่วยคิดบทพูด (Talking Points)
+# 3.1 ช่วยคิดบทพูด (Talking Points)
 def generate_talking_points(customer_name, mission_df):
     try:
         if "GROQ_API_KEY" not in st.secrets:
@@ -112,7 +112,6 @@ def generate_talking_points(customer_name, mission_df):
         Output:
         1. Ice Breaker (1 ประโยค): ทักทายเปิดบทสนทนา
         2. Talking Points (3 ข้อ): ประเด็นที่จะคุยเพื่อให้บรรลุ Mission
-        (ปรับโทนเสียงตามบริบท: ถ้าเป็นงานเลี้ยงให้เน้นความสัมพันธ์, ถ้างานขายให้เน้นข้อมูล)
         """
         
         completion = client.chat.completions.create(
@@ -125,13 +124,7 @@ def generate_talking_points(customer_name, mission_df):
     except Exception as e:
         return f"AI Error: {str(e)}"
 
-# 3.2 ฟังก์ชันตรวจการบ้าน (Strict Auditor)
-# ==========================================
-# 3.2 ฟังก์ชันตรวจการบ้าน (Strict Auditor - ฉลาดขึ้น)
-# ==========================================
-# ==========================================
-# 3.2 ฟังก์ชันตรวจการบ้าน (Strict Auditor - ฉลาดขึ้น + เข้าใจบริบท)
-# ==========================================
+# 3.2 ตรวจการบ้าน (Smart Auditor - ยืดหยุ่น)
 def validate_mission_compliance(topic, desc, report_text):
     try:
         if "GROQ_API_KEY" not in st.secrets:
@@ -140,27 +133,21 @@ def validate_mission_compliance(topic, desc, report_text):
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
         prompt = f"""
-        Role: คุณคือ "ผู้ตรวจสอบข้อมูล" (Auditor) ที่ฉลาด เข้าใจภาษาพูด และเข้าใจบริบทธุรกิจ
-        Task: ตัดสินว่า "รายงานของเซลล์" ถือว่า "ปฏิบัติภารกิจสำเร็จ" หรือไม่
+        Role: คุณคือ "ผู้ตรวจสอบข้อมูล" (Auditor) ที่มีวิจารณญาณทางธุรกิจดีเยี่ยม
+        Task: ตรวจสอบว่า "รายงานของเซลล์" ตอบโจทย์ "ภารกิจ" ได้สมเหตุสมผลหรือไม่
         
         ---
         ภารกิจ (Mission): {topic} ({desc})
         รายงาน (Report): "{report_text}"
         ---
         
-        🚨 ข้อควรระวัง (Context Awareness):
-        - รายงานมาจากการ "พูดแล้วแปลงเป็นข้อความ" อาจมีคำผิดบ้าง (เช่น "กลางแจ้ง" แทน "จะแจ้ง") ให้พยายามตีความจากบริบท
+        กฎการตัดสิน (Business Logic Criteria):
+        1. **Direct Answer:** ถ้าตอบตรงคำถาม มีข้อมูลครบ --> **PASS**
+        2. **Timeline/Deferral:** ถ้ายังตอบไม่ได้ แต่ระบุ "ช่วงเวลาที่จะรู้ผล" หรือ "ขั้นตอนต่อไป" (เช่น สรุปได้เดือนหน้า, รอเจ้านายเซ็น) --> **PASS** (ถือว่าเซลล์ทำงานแล้ว ได้ความคืบหน้า)
+        3. **Rejection/Negative:** ถ้าลูกค้าปฏิเสธ หรือบอกว่าไม่มี --> **PASS** (ถือเป็นข้อมูล Fact)
+        4. **Irrelevant:** ถ้าพูดเรื่องอื่นที่ไม่เกี่ยวเลย หรือไม่พูดถึงประเด็นนี้เลย --> **FAIL**
         
-        ✅ เกณฑ์การให้ผ่าน (PASS):
-        1. **ได้คำตอบตรงๆ:** ระบุข้อมูล/ตัวเลขชัดเจน
-        2. **ได้ Timeline (สำคัญ):** ยังไม่ได้ข้อมูลตอนนี้ แต่ระบุ **"เวลาที่จะรู้ผล"** (เช่น สรุปได้เดือนหน้า, รอผู้ใหญ่เซ็น, เดี๋ยวแจ้งมกรา) --> ถือว่า **PASS** เพราะเซลล์ได้ถามแล้ว
-        3. **ปฏิเสธ:** ลูกค้าบอกว่าไม่มี/ไม่เอา --> ถือว่า **PASS** (ได้ Fact แล้ว)
-        
-        ❌ เกณฑ์ปรับตก (FAIL):
-        - พูดเรื่องอื่นที่ไม่เกี่ยวกับภารกิจเลย
-        - ไม่ได้พูดถึงหัวข้อนี้เลย
-        
-        Output Format (ตอบบรรทัดเดียว):
+        Output Format (ตอบบรรทัดเดียวเท่านั้น):
         [PASS/FAIL]: [เหตุผลสั้นๆ]
         """
         
@@ -187,7 +174,6 @@ try:
 except:
     st.stop()
 
-# State Management
 if 'report_text_buffer' not in st.session_state:
     st.session_state.report_text_buffer = ""
 if 'sales_checklist' not in st.session_state:
@@ -260,7 +246,7 @@ else:
     st.divider()
     target_cust = st.selectbox("🏢 เลือกลูกค้าที่เข้าเยี่ยม:", my_custs)
     
-    # Logic รีเซ็ตเมื่อเปลี่ยนลูกค้า
+    # Logic รีเซ็ต
     if 'last_cust' not in st.session_state:
         st.session_state.last_cust = target_cust
     if st.session_state.last_cust != target_cust:
@@ -284,7 +270,6 @@ else:
     
     st.divider()
 
-    # 4. Mission Checklist & Reporting Area
     if my_missions.empty:
         st.success("🎉 ไม่มีงานค้าง (All Clear)")
     else:
@@ -294,11 +279,9 @@ else:
         col_mic, col_text = st.columns([1, 4])
         with col_mic:
             st.write("")
-            # key ต้องไม่ซ้ำ
             audio = mic_recorder(start_prompt="🎙️ พูด", stop_prompt="⏹️ หยุด", key="main_mic_recorder", format="webm", use_container_width=True)
         
         with col_text:
-            # Logic เมื่อพูดจบ (Anti-Loop Check)
             if audio:
                 if 'last_processed_audio' not in st.session_state:
                     st.session_state.last_processed_audio = None
@@ -309,10 +292,10 @@ else:
                     with st.spinner("กำลังแปลงเสียง และตรวจคำตอบ..."):
                         text = transcribe_audio(audio['bytes'])
                         if text:
-                            # [แก้ไข] ทับข้อความเดิมทันที (Overwrite)
+                            # [NEW] Overwrite ทับข้อความเดิมเลย
                             st.session_state.report_text_buffer = text
                             
-                            # Auto-Audit Logic
+                            # Auto-Audit Loop
                             current_report = st.session_state.report_text_buffer
                             checklist_status = st.session_state.sales_checklist
                             
@@ -331,11 +314,9 @@ else:
                             st.session_state.sales_checklist = checklist_status
                             st.rerun()
             
-            # กล่องข้อความ
             main_report_text = st.text_area("📝 รายงานผลรวม:", value=st.session_state.report_text_buffer, height=100)
             st.session_state.report_text_buffer = main_report_text
             
-            # ปุ่มตรวจมือ
             if st.button("🔄 ตรวจสอบข้อความที่พิมพ์แก้ใหม่"):
                 with st.spinner("AI กำลังตรวจใหม่..."):
                     checklist_status = st.session_state.sales_checklist
@@ -353,7 +334,7 @@ else:
 
         st.divider()
 
-        # === แสดงผลการตรวจ (Checklist Real-time) ===
+        # === แสดงผลการตรวจ (Checklist + Guideline) ===
         checklist_status = st.session_state.sales_checklist
         
         for index, row in my_missions.iterrows():
@@ -363,16 +344,27 @@ else:
             
             icon = "✅" if is_done else "🔴"
             
-            if topic in st.session_state.audit_results:
-                res_text, res_color = st.session_state.audit_results[topic]
-                display_text = res_text.replace("PASS:", "").replace("FAIL:", "").strip()
+            with st.expander(f"{icon} **{topic}**: {desc}", expanded=not is_done):
                 
-                if res_color == "green":
-                    st.success(f"**{topic}**: {display_text}")
+                # [NEW] เพิ่ม Guideline ตรงนี้
+                st.markdown("""
+                <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 10px; font-size: 0.85em; color: #31333F;">
+                    💡 <b>Guideline (ตอบยังไงให้ผ่าน):</b><br>
+                    1. <b>ข้อมูลชัด:</b> ระบุราคา, จำนวน, หรือยี่ห้อคู่แข่ง<br>
+                    2. <b>Timeline:</b> ถ้ายังไม่ซื้อ ให้ระบุว่า <i>"จะสรุปเมื่อไหร่"</i> หรือ <i>"รอผู้ใหญ่เซ็น"</i><br>
+                    3. <b>ปฏิเสธ:</b> ถ้าลูกค้าไม่เอา ให้บอกเหตุผล (เช่น แพงไป) ถือว่าผ่าน
+                </div>
+                """, unsafe_allow_html=True)
+
+                if topic in st.session_state.audit_results:
+                    res_text, res_color = st.session_state.audit_results[topic]
+                    display_text = res_text.replace("PASS:", "").replace("FAIL:", "").strip()
+                    if res_color == "green":
+                        st.success(f"ผลตรวจ: {display_text}")
+                    else:
+                        st.error(f"ผลตรวจ: {display_text}")
                 else:
-                    st.error(f"**{topic}**: {display_text}")
-            else:
-                st.info(f"**{topic}**: รอข้อมูล... ({desc})")
+                    st.info("รอข้อมูล...")
 
         # === Submit ===
         completed_count = len(checklist_status)
