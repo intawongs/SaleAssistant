@@ -12,7 +12,7 @@ from groq import Groq
 import json
 import re
 
-st.set_page_config(page_title="RC Sales AI (Direct Voice)", layout="wide", page_icon="🗣️")
+st.set_page_config(page_title="RC Sales AI (Final)", layout="wide", page_icon="🚀")
 
 # ==========================================
 # 1. CONNECTIONS
@@ -59,7 +59,7 @@ def delete_mission_from_sheet(customer_name):
     except Exception as e: st.error(f"Delete Error: {e}")
 
 # ==========================================
-# 2. UTILITIES (Date Parser Fixed)
+# 2. UTILITIES (Date Parsing Fixed)
 # ==========================================
 def transcribe_audio(audio_bytes):
     r = sr.Recognizer()
@@ -79,15 +79,15 @@ def get_task_status_by_date(topic_str):
         if not isinstance(topic_str, str): return 'today'
         today = datetime.date.today()
         
-        # 1. หา Pattern ตัวเลข / (เช่น 27/11/2025)
+        # 1. หา Pattern ตัวเลข (เช่น 27/11/2568)
         match_digit = re.search(r"(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{4})", topic_str)
         if match_digit:
             d, m, y = map(int, match_digit.groups())
-            if y > 2400: y -= 543
+            if y > 2400: y -= 543 # แปลง พ.ศ. เป็น ค.ศ. เพื่อเทียบ
             task_date = datetime.date(y, m, d)
             return 'future' if task_date > today else 'today'
 
-        # 2. หา Pattern ภาษาไทย (เช่น 27 พ.ย.)
+        # 2. หา Pattern ภาษาไทย
         match_thai = re.search(r"(\d{1,2})\s+([ก-๙.]+)", topic_str)
         if match_thai:
             day = int(match_thai.group(1))
@@ -111,23 +111,67 @@ def get_task_status_by_date(topic_str):
 # 3. AI LOGIC (Groq)
 # ==========================================
 
-# [ลบฟังก์ชัน summarize_voice_report ออกแล้ว]
+# 3.1 สรุปความ (จับคู่โจทย์ + สั้นกระชับ)
+def summarize_voice_report(raw_text, customer_name, mission_df):
+    try:
+        if "GROQ_API_KEY" not in st.secrets: return raw_text
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        
+        tasks_text = "\n".join([f"- {row['topic']}: {row['desc']}" for _, row in mission_df.iterrows()]) if not mission_df.empty else "ทั่วไป"
 
-# 3.2 Auto-Followup (Date Logic แม่นยำ)
-def create_followup_mission(customer, report_text):
+        prompt = f"""
+        Task: สรุปรายงานการขาย (จับคู่โจทย์-คำตอบ)
+        Input: "{raw_text}"
+        Questions: {tasks_text}
+        
+        คำสั่ง:
+        1. สรุปเป็น Bullet Points: "**[โจทย์]**: [คำตอบสั้นๆ]"
+        2. ถ้ามีเรื่องอื่น ให้ใส่หัวข้อ "**อื่นๆ**: ..."
+        3. ตัดคำเยิ่นเย้อ (เช่น "ลูกค้าแจ้งว่า", "จากการสอบถาม") ออกให้หมด เอาเนื้อหาเลย
+        4. รักษาตัวเลข/วันที่ ไว้ให้ครบ
+        """
+        
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1, max_tokens=300
+        )
+        return completion.choices[0].message.content
+    except: return raw_text
+
+# 3.2 Auto-Followup (คำนวณวันพรุ่งนี้ + Format หัวข้อเป๊ะๆ)
+def create_followup_mission(customer, report_text, original_topic):
     try:
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-        today = datetime.datetime.now().strftime("%d/%m/%Y")
+        
+        # คำนวณเวลาไทย (GMT+7) และ พ.ศ.
+        tz = datetime.timezone(datetime.timedelta(hours=7))
+        now = datetime.datetime.now(tz)
+        
+        today_be = now.year + 543
+        today_str = f"{now.day}/{now.month}/{today_be}"
+        
+        tomorrow = now + datetime.timedelta(days=1)
+        tomorrow_be = tomorrow.year + 543
+        tomorrow_str = f"{tomorrow.day}/{tomorrow.month}/{tomorrow_be}"
         
         prompt = f"""
-        Role: Scheduler. Date: {today}. Input: "{report_text}"
+        Role: Scheduler. 
+        Ref Date -> Today: {today_str}, Tomorrow: {tomorrow_str}
+        Input Report: "{report_text}"
+        Original Topic: "{original_topic}"
+        Customer: "{customer}"
+        
         Task: Create NEXT mission (`create`: true).
         
-        🔥 Date Priority Rules:
-        1. **Specific Date** (e.g. 7 ธ.ค., วันที่ 15) -> Topic: "Follow up ([Date])"
-        2. **Month Only** (e.g. มกราคม) -> Topic: "Follow up (1 [Month])"
-        3. **Quarter** (e.g. Q1) -> Topic: "Follow up (1 [First Month])"
-        4. **No Date** -> Topic: "Monthly Visit"
+        🔥 Date Rules:
+        1. เจอ "พรุ่งนี้" -> ใช้ {tomorrow_str}
+        2. เจอวันที่ (5 ธ.ค.) -> ใช้ d/m/yyyy (พ.ศ.)
+        3. เจอเดือน -> ใช้วันที่ 1 ของเดือนนั้น
+        4. ไม่เจอเวลา -> ใช้ "Monthly Visit"
+        
+        🔥 Topic Format (Strict):
+        "Follow up ({customer}) ([Date]): {original_topic}"
         
         Output JSON: {{ "create": true, "topic": "...", "desc": "...", "status": "pending" }}
         """
@@ -248,7 +292,7 @@ else:
             st.info(f"🔹 **{row['topic']}**: {row['desc']}")
         
         st.divider()
-        st.write("🎙️ **รายงานผล (พูดแล้วข้อความจะขึ้นด้านล่าง):**")
+        st.write("🎙️ **รายงานผล (พูดเลย):**")
         
         c1, c2 = st.columns([1, 4])
         with c1:
@@ -259,27 +303,32 @@ else:
                 if 'last_audio' not in st.session_state: st.session_state.last_audio = None
                 if audio['bytes'] != st.session_state.last_audio:
                     st.session_state.last_audio = audio['bytes']
-                    with st.spinner("กำลังแปลงเสียง..."):
+                    with st.spinner("กำลังจับคู่คำตอบ..."):
                         raw_text = transcribe_audio(audio['bytes'])
                         if raw_text:
-                            # [DIRECT] ไม่ต้องผ่าน AI Summarizer เอาข้อความดิบใส่เลย
-                            st.session_state.report_text_buffer = raw_text
+                            st.session_state.raw_voice_buffer = raw_text
+                            # ส่ง df_today ไปให้ AI จับคู่โจทย์
+                            summary = summarize_voice_report(raw_text, target_cust, df_today)
+                            st.session_state.report_text_buffer = summary
                             st.rerun()
             
-            final_report = st.text_area("📝 รายละเอียด:", value=st.session_state.report_text_buffer, height=150)
+            final_report = st.text_area("📝 สรุปจาก AI (แก้ไขได้):", value=st.session_state.report_text_buffer, height=200)
             st.session_state.report_text_buffer = final_report
+            
+            if st.session_state.raw_voice_buffer:
+                with st.expander("ดูข้อความเสียงต้นฉบับ"): st.caption(st.session_state.raw_voice_buffer)
 
         if st.session_state.report_text_buffer:
             if st.button("🚀 ปิดงาน (Save)", type="primary", use_container_width=True):
                 ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 topics = ", ".join(df_today['topic'].tolist())
                 
-                # Save Raw Text directly
                 append_data("Reports", [ts, cur_user, target_cust, topics, "Completed", final_report])
                 delete_mission_from_sheet(target_cust)
                 
                 with st.spinner("Creating Next Mission..."):
-                    fup = create_followup_mission(target_cust, final_report)
+                    # ส่ง topics เดิมเข้าไปด้วย
+                    fup = create_followup_mission(target_cust, final_report, topics)
                     if fup.get("create"):
                         append_data("Missions", [target_cust, fup['topic'], fup['desc'], "pending"])
                         st.toast(f"Next: {fup['topic']}", icon="📅")
@@ -292,7 +341,6 @@ else:
         else:
             st.button("🔒 ปิดงาน", disabled=True, use_container_width=True)
 
-    # === FUTURE MISSION ===
     if not df_future.empty:
         st.markdown("---")
         st.subheader(f"📅 งานในอนาคต ({len(df_future)}):")
