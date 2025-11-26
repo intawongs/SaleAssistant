@@ -131,59 +131,49 @@ def summarize_voice_report(raw_text, customer_name):
 
 # 3.2 Auto-Followup (AI ฉลาดเลือกวัน)
 # ==========================================
-# 3.2 Auto-Followup (Logic ลำดับขั้น: วัน -> เดือน -> ไตรมาส)
 # ==========================================
-def create_followup_mission(customer, report_text):
+# 3.2 Auto-Followup (ใส่ Topic เดิม + ตัดคำเวิ่นเว้อ)
+# ==========================================
+def create_followup_mission(customer, report_text, original_topics):
     try:
-        # เช็ค Key
-        if "GROQ_API_KEY" not in st.secrets: return {"create": False}
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-        
         today = datetime.datetime.now().strftime("%d/%m/%Y")
+        
+        # Force GMT+7 for correct tomorrow
+        tz = datetime.timezone(datetime.timedelta(hours=7))
+        now = datetime.datetime.now(tz)
+        tomorrow_str = (now + datetime.timedelta(days=1)).strftime("%d/%m/%Y")
         
         prompt = f"""
         Role: ระบบ Scheduler อัจฉริยะ
-        Date Today: {today}
-        Input: "{report_text}"
+        Date Today: {today} (Tomorrow: {tomorrow_str})
+        Report: "{report_text}"
+        Original Task: "{original_topics}"
         
-        ภารกิจ: สร้างหัวข้อภารกิจใหม่ (Topic) โดยตรวจสอบเงื่อนไขตามลำดับดังนี้ (Check in Order):
+        ภารกิจ: สร้างงานใหม่ (`create`: true)
         
-        🔻 STEP 1: เช็คว่ามี "เลขวันที่" หรือไม่? (Priority สูงสุด)
-           - คำที่หา: "วันที่ 7", "7 ธ.ค.", "ภายในวันที่ 15", "สิ้นเดือน" (ตีเป็น 30/31)
-           - ถ้าเจอ: ให้ใช้เลขวันที่นั้นทันที
-           - Topic: "Follow up ([เลขวันที่] [เดือน])" -> จบการทำงาน
-           
-        🔻 STEP 2: (ถ้าไม่เจอข้อ 1) เช็คว่ามี "ชื่อเดือน" หรือไม่?
-           - คำที่หา: "มกราคม", "เดือนหน้า", "กุมภาพันธ์"
-           - ถ้าเจอ: ให้กำหนดเป็น "วันที่ 1" ของเดือนนั้น
-           - Topic: "Follow up (1 [เดือน])" -> จบการทำงาน
-           
-        🔻 STEP 3: (ถ้าไม่เจอข้อ 2) เช็คว่ามี "ไตรมาส" หรือไม่?
-           - คำที่หา: "Q1", "ไตรมาส 2", "ต้นปีหน้า"
-           - ถ้าเจอ: ให้กำหนดเป็น "วันที่ 1" ของเดือนแรกในไตรมาสนั้น
-           - Topic: "Follow up (1 [เดือนแรกของไตรมาส])" -> จบการทำงาน
-           
-        🔻 STEP 4: (ถ้าไม่เจออะไรเลย)
-           - Topic: "Monthly Visit"
+        🔥 กฎการตั้งชื่อ Topic (Format):
+        "Follow up ([วันที่นัด]) (เรื่อง: {original_topics})"
         
-        Output JSON Format:
-        {{
-            "create": true,
-            "topic": "...",
-            "desc": "แจ้งเตือนจากรายงาน: {report_text}",
-            "status": "pending"
-        }}
+        🔥 กฎเนื้อหา (Desc):
+        - เอาเฉพาะเนื้อหาที่เกี่ยวกับวันที่หรือสิ่งที่ต้องทำ
+        - **ห้ามใส่** ประโยคปฏิเสธเช่น "ไม่มีข้อมูลเพิ่มเติม...", "หากต้องการข้อมูล..." ให้ตัดทิ้งให้หมด
+        
+        🔥 Date Logic:
+        1. เจอวันที่ (5 ธ.ค.) -> ใช้ 5 ธ.ค.
+        2. เจอ "พรุ่งนี้" -> ใช้ {tomorrow_str}
+        3. ไม่เจอเลย -> Monthly Visit
+        
+        Output JSON: {{ "create": true, "topic": "...", "desc": "...", "status": "pending" }}
         """
         
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile", 
+            model="llama-3.1-8b-instant", 
             messages=[{"role": "user", "content": prompt}], 
-            temperature=0.0, # บังคับให้ทำตาม Step เป๊ะๆ
-            response_format={"type": "json_object"}
+            temperature=0.1, response_format={"type": "json_object"}
         )
         return json.loads(completion.choices[0].message.content)
-        
-    except Exception as e:
+    except:
         return {"create": True, "topic": "Monthly Visit", "desc": "Auto-Gen", "status": "pending"}
 
 # 3.3 AI Coach
@@ -318,16 +308,21 @@ else:
             if st.session_state.raw_voice_buffer:
                 with st.expander("ดูเสียงต้นฉบับ"): st.caption(st.session_state.raw_voice_buffer)
 
+        
         if st.session_state.report_text_buffer:
             if st.button("🚀 ปิดงาน (Save)", type="primary", use_container_width=True):
                 ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                # 1. เตรียม Topics
                 topics = ", ".join(df_today['topic'].tolist())
                 
+                # 2. Save Report
                 append_data("Reports", [ts, cur_user, target_cust, topics, "Completed", final_report])
                 delete_mission_from_sheet(target_cust)
                 
+                # 3. [แก้ตรงนี้] ส่ง topics เข้าไปด้วย
                 with st.spinner("Generating Next Mission..."):
-                    fup = create_followup_mission(target_cust, final_report)
+                    fup = create_followup_mission(target_cust, final_report, topics) # <--- ส่ง topics เพิ่ม
                     if fup.get("create"):
                         append_data("Missions", [target_cust, fup['topic'], fup['desc'], "pending"])
                         st.toast(f"Next: {fup['topic']}", icon="📅")
@@ -337,8 +332,6 @@ else:
                 st.session_state.talking_points_cache = None
                 time.sleep(2)
                 st.rerun()
-        else:
-            st.button("🔒 ปิดงาน", disabled=True, use_container_width=True)
 
     # === FUTURE MISSION ===
     if not df_future.empty:
