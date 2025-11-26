@@ -154,38 +154,47 @@ def summarize_voice_report(raw_text, customer_name, mission_df):
     except: return raw_text
 
 # 3.2 Auto-Followup (คำนวณวันพรุ่งนี้ + Format หัวข้อเป๊ะๆ)
+# ==========================================
+# 3.2 Auto-Followup (AI เรียบเรียงชื่อหัวข้อใหม่ให้สวยงาม)
+# ==========================================
 def create_followup_mission(customer, report_text, original_topic):
     try:
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
-        # คำนวณเวลาไทย (GMT+7) และ พ.ศ.
+        # คำนวณวันพรุ่งนี้รอไว้ (เผื่อใช้)
         tz = datetime.timezone(datetime.timedelta(hours=7))
         now = datetime.datetime.now(tz)
-        
-        today_be = now.year + 543
-        today_str = f"{now.day}/{now.month}/{today_be}"
-        
-        tomorrow = now + datetime.timedelta(days=1)
-        tomorrow_be = tomorrow.year + 543
-        tomorrow_str = f"{tomorrow.day}/{tomorrow.month}/{tomorrow_be}"
+        tomorrow_year_be = (now + datetime.timedelta(days=1)).year + 543
+        tomorrow_str = (now + datetime.timedelta(days=1)).strftime(f"%d/%m/{tomorrow_year_be}")
+        today_str = now.strftime(f"%d/%m/{now.year+543}")
         
         prompt = f"""
-        Role: Scheduler. 
-        Ref Date -> Today: {today_str}, Tomorrow: {tomorrow_str}
-        Input Report: "{report_text}"
-        Original Topic: "{original_topic}"
-        Customer: "{customer}"
+        Role: เลขานุการมืออาชีพ
+        Date Today: {today_str}
+        Date Tomorrow: {tomorrow_str}
         
-        Task: Create NEXT mission (`create`: true).
+        Input:
+        - รายงานล่าสุด: "{report_text}"
+        - หัวข้อเดิม: "{original_topic}"
+        - ลูกค้า: "{customer}"
         
-        🔥 Date Rules:
-        1. เจอ "พรุ่งนี้" -> ใช้ {tomorrow_str}
-        2. เจอวันที่ (5 ธ.ค.) -> ใช้ d/m/yyyy (พ.ศ.)
-        3. เจอเดือน -> ใช้วันที่ 1 ของเดือนนั้น
-        4. ไม่เจอเวลา -> ใช้ "Monthly Visit"
+        ภารกิจ: สร้างหัวข้องานใหม่ (`topic`) ที่กระชับ เป็นทางการ และเข้าใจง่าย
         
-        🔥 Topic Format (Strict):
-        "Follow up ({customer}) ([Date]): {original_topic}"
+        🔥 กฎการตั้งชื่อ (Naming Rules):
+        1. **ห้าม** ใช้ Format ตายตัว ให้ AI เรียบเรียงใหม่เลย
+        2. **โครงสร้าง:** "[กริยา] [สิ่งที่ต้องทำ] (นัด: [วันที่])"
+        3. **ภาษา:** ภาษาธุรกิจ กระชับ (เช่น ติดตาม, เข้าพบ, สรุป, เสนอราคา)
+        4. **ห้าม** เอาประโยคบอกเล่ามาใส่ (เช่น "ลูกค้าบอกว่า...") ให้เปลี่ยนเป็นสิ่งที่เซลล์ต้องทำ
+        
+        🔥 กฎวันที่ (Date Logic):
+        - เจอ "พรุ่งนี้" -> ใช้ {tomorrow_str}
+        - เจอวันที่ชัดเจน (7 ธ.ค.) -> ใช้ d/m/yyyy (พ.ศ.)
+        - ไม่เจอวัน -> ใช้ "Monthly Visit"
+        
+        ตัวอย่าง Output ที่ต้องการ:
+        - "ติดตามสรุปออเดอร์ปลายปี (นัด: 27/11/2568)"
+        - "เข้าพบเพื่อปิดการขาย (นัด: 5/12/2568)"
+        - "ติดตามผลการเสนอราคา (นัด: 15/01/2569)"
         
         Output JSON: {{ "create": true, "topic": "...", "desc": "...", "status": "pending" }}
         """
@@ -193,7 +202,8 @@ def create_followup_mission(customer, report_text, original_topic):
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile", 
             messages=[{"role": "user", "content": prompt}], 
-            temperature=0.1, response_format={"type": "json_object"}
+            temperature=0.3, # เพิ่ม creativity นิดนึงให้เรียบเรียงคำสวย
+            response_format={"type": "json_object"}
         )
         return json.loads(completion.choices[0].message.content)
     except:
@@ -211,6 +221,28 @@ def generate_talking_points(customer, mission_df):
         )
         return completion.choices[0].message.content
     except: return "..."
+
+
+# 3.2 [NEW] วิเคราะห์ Sentiment
+def analyze_sentiment(report_text):
+    try:
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        prompt = f"""
+        Role: Sales Analyst
+        Task: ให้คะแนน Sentiment จากรายงาน: "{report_text}"
+        Criteria:
+        🟢 Positive: สนใจ, สั่งซื้อ, นัดวันชัดเจน
+        🟡 Neutral: รอตัดสินใจ, กลางๆ
+        🔴 Negative: ปฏิเสธ, ไม่สนใจ, มีปัญหา
+        Output: เลือก 1 อัน (🟢 Positive / 🟡 Neutral / 🔴 Negative)
+        """
+        completion = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0, max_tokens=10
+        )
+        return completion.choices[0].message.content.strip()
+    except: return "⚪ Unknown"
 
 # ==========================================
 # 4. UI & LOGIC
@@ -332,12 +364,18 @@ else:
             if st.session_state.raw_voice_buffer:
                 with st.expander("ดูข้อความเสียงต้นฉบับ"): st.caption(st.session_state.raw_voice_buffer)
 
+
         if st.session_state.report_text_buffer:
             if st.button("🚀 ปิดงาน (Save)", type="primary", use_container_width=True):
                 ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 topics = ", ".join(df_today['topic'].tolist())
                 
-                append_data("Reports", [ts, cur_user, target_cust, topics, "Completed", final_report])
+                # [จุดเรียกใช้] ส่งข้อความสรุป (final_report) ไปให้ AI วิเคราะห์
+                sentiment = analyze_sentiment(final_report) 
+                
+                # [จุดบันทึก] เอาค่า sentiment ใส่ลงไปในลำดับที่ 6
+                # Format: [Timestamp, User, Cust, Topics, Status, Sentiment, Summary]
+                append_data("Reports", [ts, cur_user, target_cust, topics, "Completed", sentiment, final_report])
                 delete_mission_from_sheet(target_cust)
                 
                 with st.spinner("Creating Next Mission..."):
@@ -354,6 +392,8 @@ else:
                 st.rerun()
         else:
             st.button("🔒 ปิดงาน", disabled=True, use_container_width=True)
+        
+        
 
     if not df_future.empty:
         st.markdown("---")
