@@ -125,6 +125,9 @@ def generate_talking_points(customer_name, mission_df):
         return f"AI Error: {str(e)}"
 
 # 3.2 ตรวจการบ้าน (Smart Auditor - ยืดหยุ่น)
+# ==========================================
+# 3.2 ฟังก์ชันตรวจการบ้าน (Smart Auditor V.3 - เข้าใจบริบท)
+# ==========================================
 def validate_mission_compliance(topic, desc, report_text):
     try:
         if "GROQ_API_KEY" not in st.secrets:
@@ -133,29 +136,32 @@ def validate_mission_compliance(topic, desc, report_text):
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
         prompt = f"""
-        Role: คุณคือ "ผู้ตรวจสอบข้อมูล" (Auditor) ที่มีวิจารณญาณทางธุรกิจดีเยี่ยม
-        Task: ตรวจสอบว่า "รายงานของเซลล์" ตอบโจทย์ "ภารกิจ" ได้สมเหตุสมผลหรือไม่
+        Role: คุณคือ "ผู้ตรวจสอบข้อมูล" (Auditor) ที่ฉลาดและเข้าใจธรรมชาติการพูดของมนุษย์
+        Task: ตัดสินว่า "รายงานของเซลล์" ถือว่า "ผ่าน" หรือไม่ สำหรับโจทย์ที่กำหนด
         
         ---
-        ภารกิจ (Mission): {topic} ({desc})
-        รายงาน (Report): "{report_text}"
+        โจทย์ (Mission): {topic} ({desc})
+        คำตอบ (Report): "{report_text}"
         ---
         
-        กฎการตัดสิน (Business Logic Criteria):
-        1. **Direct Answer:** ถ้าตอบตรงคำถาม มีข้อมูลครบ --> **PASS**
-        2. **Timeline/Deferral:** ถ้ายังตอบไม่ได้ แต่ระบุ "ช่วงเวลาที่จะรู้ผล" หรือ "ขั้นตอนต่อไป" (เช่น สรุปได้เดือนหน้า, รอเจ้านายเซ็น) --> **PASS** (ถือว่าเซลล์ทำงานแล้ว ได้ความคืบหน้า)
-        3. **Rejection/Negative:** ถ้าลูกค้าปฏิเสธ หรือบอกว่าไม่มี --> **PASS** (ถือเป็นข้อมูล Fact)
-        4. **Irrelevant:** ถ้าพูดเรื่องอื่นที่ไม่เกี่ยวเลย หรือไม่พูดถึงประเด็นนี้เลย --> **FAIL**
+        กฎการตัดสิน (Logic):
+        1. **Context Inference (สำคัญมาก):** ให้สมมติว่า "คำตอบ" นี้คือกำลังพูดถึง "โจทย์" อยู่เสมอ (ไม่ต้องให้เซลล์ทวนโจทย์ซ้ำ)
+           * *ตัวอย่าง:* โจทย์ถาม "ออเดอร์ปีหน้า" -> คำตอบ "สรุปได้มกรา" --> **PASS** (เข้าใจได้ว่าคือออเดอร์ปีหน้า)
+           * *ห้ามปรับตก* เพียงเพราะเซลล์ไม่ได้พูดคำว่า "{topic}" ซ้ำในคำตอบ
+           
+        2. **Timeline is a valid answer:** การระบุวัน/เวลาที่จะรู้ผล (Pending Status) ถือว่าเป็นคำตอบที่ถูกต้องแล้ว --> **PASS**
         
-        Output Format (ตอบบรรทัดเดียวเท่านั้น):
-        [PASS/FAIL]: [เหตุผลสั้นๆ]
+        3. **Rejection is a valid answer:** การปฏิเสธ/ยังไม่เอา --> **PASS**
+
+        Output Format (ตอบบรรทัดเดียว):
+        [PASS/FAIL]: [เหตุผลสั้นๆ ภาษาไทย]
         """
         
         completion = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1, 
-            max_tokens=150
+            max_tokens=100
         )
         result = completion.choices[0].message.content
         
