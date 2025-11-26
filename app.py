@@ -106,25 +106,34 @@ def get_task_status_by_date(topic_str):
 # ==========================================
 
 # 3.1 สรุปความ (สั้น กระชับ ได้ใจความ)
+# ==========================================
+# 3.1 สรุปความ (Smart Summarizer - แก้คำพูดและตัดส่วนเกิน)
+# ==========================================
 def summarize_voice_report(raw_text, customer_name):
     try:
         if "GROQ_API_KEY" not in st.secrets: return raw_text
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
         prompt = f"""
-        Task: สรุปรายงานการขายของลูกค้า {customer_name}
-        Input: "{raw_text}"
+        Context: นี่คือคำพูดของ "Sales Rep" ที่กำลังรายงานผลการเยี่ยมลูกค้าชื่อ "{customer_name}" ส่งให้หัวหน้าอ่าน
+        Input Text: "{raw_text}"
         
-        คำสั่ง:
-        - สรุปสั้นๆ ห้วนๆ แบบภาษาข่าว (Concise Bullet Points)
-        - ตัดคำฟุ่มเฟือยทิ้งให้หมด (เช่น "ครับ", "ผมคิดว่า")
-        - **ห้ามตัด** ตัวเลข, วันที่, ราคา, ชื่อคน
+        คำสั่ง (Strict Rules):
+        1. **แก้ไขประธานให้ถูก:** ให้สรุปว่า "ลูกค้าแจ้งว่า..." หรือ "ลูกค้าต้องการ..." (ห้ามใช้คำว่า ลูกค้าได้รับแจ้ง)
+        2. **ตัดส่วนเกินทิ้ง (No Filler):** - ห้ามใส่ประโยคพวก "ไม่มีข้อมูลเพิ่มเติม", "หากต้องการรายละเอียดติดต่อ..."
+           - ห้ามขึ้นต้นว่า "สรุปรายงาน..." ให้ใส่เนื้อหาเลย
+        3. **เน้นเนื้อหา (Facts Only):** เก็บวันที่ (เช่น 7 ธ.ค.), ตัวเลข, ราคา ให้ครบถ้วน
+        4. **ความยาว:** ขอสั้นๆ กระชับที่สุด ไม่เกิน 2 บรรทัด
+        
+        ตัวอย่าง Output ที่ต้องการ:
+        "ลูกค้าแจ้งว่าจะคอนเฟิร์มออเดอร์ภายในวันที่ 7 ธ.ค. นี้"
         """
         
         completion = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3, max_tokens=200
+            temperature=0.1, # ใช้ 0.1 เพื่อความแม่นยำ ไม่แต่งเติม
+            max_tokens=200
         )
         return completion.choices[0].message.content
     except: return raw_text
