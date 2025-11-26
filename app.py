@@ -126,6 +126,9 @@ def generate_talking_points(customer_name, mission_df):
         return f"AI Error: {str(e)}"
 
 # 3.2 ฟังก์ชันตรวจการบ้าน (Strict Auditor)
+# ==========================================
+# 3.2 ฟังก์ชันตรวจการบ้าน (Strict Auditor - ฉลาดขึ้น)
+# ==========================================
 def validate_mission_compliance(topic, desc, report_text):
     try:
         if "GROQ_API_KEY" not in st.secrets:
@@ -134,31 +137,33 @@ def validate_mission_compliance(topic, desc, report_text):
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
         prompt = f"""
-        Role: คุณคือ "ผู้ตรวจสอบข้อมูล" (Auditor) ที่มีวิจารณญาณดีเยี่ยม
-        Task: ตรวจสอบว่า "รายงานของเซลล์" ตอบโจทย์ "คำสั่ง" ได้สมเหตุสมผลหรือไม่
+        Role: คุณคือ "ผู้ตรวจสอบข้อมูล" (Auditor) ที่มีวิจารณญาณทางธุรกิจดีเยี่ยม
+        Task: ตรวจสอบว่า "รายงานของเซลล์" ตอบโจทย์ "ภารกิจ" ได้สมเหตุสมผลหรือไม่
         
         ---
-        คำสั่ง (Mission): {topic} ({desc})
+        ภารกิจ (Mission): {topic} ({desc})
         รายงาน (Report): "{report_text}"
         ---
         
-        กฎการตัดสิน (Criteria - Flexible):
-        1. **Timeframe:** ให้ยอมรับคำที่ความหมายใกล้เคียงกันได้ (เช่น ปลายปี = ธ.ค., ปีหน้า = ม.ค. เป็นต้น)
-        2. **Substance:** ถ้าเซลล์ให้ "ข้อมูลใหม่" หรือ "คำอธิบาย" ที่เกี่ยวข้องกับโจทย์ แม้จะเป็นข่าวร้ายหรือปฏิเสธ ก็ถือว่า **PASS**
-        3. **Completeness:** ให้ FAIL เฉพาะกรณีที่ "ไม่ได้พูดถึงเรื่องนั้นเลย" หรือ "ตอบคนละเรื่อง" เท่านั้น
+        กฎการตัดสิน (Business Logic Criteria):
+        1. **Direct Answer:** ถ้าตอบตรงคำถาม มีข้อมูลครบ --> **PASS**
+        2. **Timeline/Deferral:** ถ้ายังตอบไม่ได้ แต่ระบุ "ช่วงเวลาที่จะรู้ผล" หรือ "ขั้นตอนต่อไป" (เช่น สรุปได้เดือนหน้า, รอเจ้านายเซ็น) --> **PASS** (ถือว่าเซลล์ทำงานแล้ว ได้ความคืบหน้า)
+        3. **Rejection/Negative:** ถ้าลูกค้าปฏิเสธ หรือบอกว่าไม่มี --> **PASS** (ถือเป็นข้อมูล Fact)
+        4. **Irrelevant:** ถ้าพูดเรื่องอื่นที่ไม่เกี่ยวเลย หรือไม่พูดถึงประเด็นนี้เลย --> **FAIL**
         
-        Output Format (ตอบบรรทัดเดียว):
+        Output Format (ตอบบรรทัดเดียวเท่านั้น):
         [PASS/FAIL]: [เหตุผลสั้นๆ]
         """
         
         completion = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=100
+            temperature=0.1, 
+            max_tokens=150
         )
         result = completion.choices[0].message.content
         
+        # ป้องกัน AI ตอบยาวเกิน
         if "PASS" in result: return result, "green"
         else: return result, "red"
             
