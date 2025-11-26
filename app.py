@@ -9,8 +9,9 @@ from streamlit_mic_recorder import mic_recorder
 import io
 from pydub import AudioSegment
 from groq import Groq
+import json
 
-st.set_page_config(page_title="RC Sales AI (Ultimate)", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="RC Sales AI (Final)", layout="wide", page_icon="🚀")
 
 # ==========================================
 # 1. GOOGLE SHEETS CONNECTION & CACHING
@@ -112,6 +113,7 @@ def generate_talking_points(customer_name, mission_df):
         Output:
         1. Ice Breaker (1 ประโยค): ทักทายเปิดบทสนทนา
         2. Talking Points (3 ข้อ): ประเด็นที่จะคุยเพื่อให้บรรลุ Mission
+        (ปรับโทนเสียงตามบริบท: ถ้าเป็นงานเลี้ยงให้เน้นความสัมพันธ์, ถ้างานขายให้เน้นข้อมูล)
         """
         
         completion = client.chat.completions.create(
@@ -125,9 +127,6 @@ def generate_talking_points(customer_name, mission_df):
         return f"AI Error: {str(e)}"
 
 # 3.2 ตรวจการบ้าน (Smart Auditor - ยืดหยุ่น)
-# ==========================================
-# 3.2 ฟังก์ชันตรวจการบ้าน (Smart Auditor V.3 - เข้าใจบริบท)
-# ==========================================
 def validate_mission_compliance(topic, desc, report_text):
     try:
         if "GROQ_API_KEY" not in st.secrets:
@@ -136,32 +135,29 @@ def validate_mission_compliance(topic, desc, report_text):
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
         prompt = f"""
-        Role: คุณคือ "ผู้ตรวจสอบข้อมูล" (Auditor) ที่ฉลาดและเข้าใจธรรมชาติการพูดของมนุษย์
-        Task: ตัดสินว่า "รายงานของเซลล์" ถือว่า "ผ่าน" หรือไม่ สำหรับโจทย์ที่กำหนด
+        Role: คุณคือ "ผู้ตรวจสอบข้อมูล" (Auditor) ที่มีวิจารณญาณทางธุรกิจดีเยี่ยม
+        Task: ตรวจสอบว่า "รายงานของเซลล์" ตอบโจทย์ "ภารกิจ" ได้สมเหตุสมผลหรือไม่
         
         ---
-        โจทย์ (Mission): {topic} ({desc})
-        คำตอบ (Report): "{report_text}"
+        ภารกิจ (Mission): {topic} ({desc})
+        รายงาน (Report): "{report_text}"
         ---
         
-        กฎการตัดสิน (Logic):
-        1. **Context Inference (สำคัญมาก):** ให้สมมติว่า "คำตอบ" นี้คือกำลังพูดถึง "โจทย์" อยู่เสมอ (ไม่ต้องให้เซลล์ทวนโจทย์ซ้ำ)
-           * *ตัวอย่าง:* โจทย์ถาม "ออเดอร์ปีหน้า" -> คำตอบ "สรุปได้มกรา" --> **PASS** (เข้าใจได้ว่าคือออเดอร์ปีหน้า)
-           * *ห้ามปรับตก* เพียงเพราะเซลล์ไม่ได้พูดคำว่า "{topic}" ซ้ำในคำตอบ
-           
-        2. **Timeline is a valid answer:** การระบุวัน/เวลาที่จะรู้ผล (Pending Status) ถือว่าเป็นคำตอบที่ถูกต้องแล้ว --> **PASS**
+        กฎการตัดสิน (Business Logic Criteria):
+        1. **Direct Answer:** ถ้าตอบตรงคำถาม มีข้อมูลครบ --> **PASS**
+        2. **Timeline/Deferral:** ถ้ายังตอบไม่ได้ แต่ระบุ "ช่วงเวลาที่จะรู้ผล" หรือ "ขั้นตอนต่อไป" (เช่น สรุปได้เดือนหน้า, รอเจ้านายเซ็น) --> **PASS** (ถือว่าเซลล์ทำงานแล้ว ได้ความคืบหน้า)
+        3. **Rejection/Negative:** ถ้าลูกค้าปฏิเสธ หรือบอกว่าไม่มี --> **PASS** (ถือเป็นข้อมูล Fact)
+        4. **Irrelevant:** ถ้าพูดเรื่องอื่นที่ไม่เกี่ยวเลย หรือไม่พูดถึงประเด็นนี้เลย --> **FAIL**
         
-        3. **Rejection is a valid answer:** การปฏิเสธ/ยังไม่เอา --> **PASS**
-
-        Output Format (ตอบบรรทัดเดียว):
-        [PASS/FAIL]: [เหตุผลสั้นๆ ภาษาไทย]
+        Output Format (ตอบบรรทัดเดียวเท่านั้น):
+        [PASS/FAIL]: [เหตุผลสั้นๆ]
         """
         
         completion = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1, 
-            max_tokens=100
+            max_tokens=150
         )
         result = completion.choices[0].message.content
         
@@ -170,6 +166,56 @@ def validate_mission_compliance(topic, desc, report_text):
             
     except Exception as e:
         return f"Error: {e}", "gray"
+
+# 3.3 สร้างงานติดตามผลอัตโนมัติ (Auto-Followup)
+def create_followup_mission(customer, report_text):
+    try:
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        today = datetime.datetime.now().strftime("%d/%m/%Y")
+        
+        prompt = f"""
+        Role: ระบบ CRM อัตโนมัติ
+        Date: {today}
+        Report: "{report_text}"
+        
+        คำสั่ง: สร้าง "ภารกิจติดตามผล (Next Mission)" โดยยึดหลักการ **"Always Follow-up"**:
+        
+        1. **กรณีมีกำหนดการชัดเจน (Specific Date):**
+           - เช่น "ขอคิดดู 2 อาทิตย์", "สรุปงบเดือนหน้า", "โทรมาศุกร์นี้"
+           - ให้สร้างงานล่วงหน้าก่อนถึงกำหนดนั้นเล็กน้อย
+           - Topic: "ติดตามผล: [เรื่องเดิม]"
+           
+        2. **กรณีอื่นๆ ทั้งหมด (General / Not Interested):**
+           - เช่น "ยังไม่สนใจ", "ของเต็ม", "เงียบ", "ปฏิเสธ", หรือ "ไม่ได้ระบุวัน"
+           - **บังคับสร้างงานเดือนถัดไปทันที (Monthly Touchbase)** ห้ามปล่อยว่าง
+           - Topic: "Monthly Visit"
+           - Desc: "รักษาความสัมพันธ์ต่อเนื่อง (อ้างอิงรายงานเก่า: ...)"
+           
+        Output JSON:
+        {{
+            "create": true,
+            "topic": "...",
+            "desc": "...",
+            "status": "pending"
+        }}
+        """
+        
+        completion = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            response_format={"type": "json_object"}
+        )
+        
+        return json.loads(completion.choices[0].message.content)
+        
+    except Exception as e:
+        return {
+            "create": True,
+            "topic": "Monthly Visit (System Auto)",
+            "desc": "ระบบสร้างให้อัตโนมัติเพื่อความต่อเนื่อง",
+            "status": "pending"
+        }
 
 # ==========================================
 # 4. LOAD DATA
@@ -180,6 +226,7 @@ try:
 except:
     st.stop()
 
+# State Management
 if 'report_text_buffer' not in st.session_state:
     st.session_state.report_text_buffer = ""
 if 'sales_checklist' not in st.session_state:
@@ -276,6 +323,7 @@ else:
     
     st.divider()
 
+    # 4. Mission Checklist & Reporting Area
     if my_missions.empty:
         st.success("🎉 ไม่มีงานค้าง (All Clear)")
     else:
@@ -285,9 +333,11 @@ else:
         col_mic, col_text = st.columns([1, 4])
         with col_mic:
             st.write("")
+            # key ต้องไม่ซ้ำ
             audio = mic_recorder(start_prompt="🎙️ พูด", stop_prompt="⏹️ หยุด", key="main_mic_recorder", format="webm", use_container_width=True)
         
         with col_text:
+            # Logic เมื่อพูดจบ
             if audio:
                 if 'last_processed_audio' not in st.session_state:
                     st.session_state.last_processed_audio = None
@@ -298,17 +348,26 @@ else:
                     with st.spinner("กำลังแปลงเสียง และตรวจคำตอบ..."):
                         text = transcribe_audio(audio['bytes'])
                         if text:
-                            # [NEW] Overwrite ทับข้อความเดิมเลย
+                            # [Overwite] ทับข้อความเดิมทันที
                             st.session_state.report_text_buffer = text
                             
-                            # Auto-Audit Loop
+                            # Auto-Audit Logic
                             current_report = st.session_state.report_text_buffer
                             checklist_status = st.session_state.sales_checklist
                             
                             for index, row in my_missions.iterrows():
                                 topic = row['topic']
                                 desc = row['desc']
-                                result, color = validate_mission_compliance(topic, desc, current_report)
+                                
+                                # [NEW] Bypass Logic: ถ้าเป็นงานทั่วไป ให้ผ่านเลยไม่ต้องตรวจ
+                                is_general_task = any(kw in topic.lower() for kw in ["monthly", "visit", "contact", "เยี่ยม", "ทั่วไป", "ติดตาม"])
+                                
+                                if is_general_task:
+                                    result, color = "✅ บันทึกข้อมูลเรียบร้อย (General Visit)", "green"
+                                else:
+                                    # ถ้างานเจาะจง ให้ AI Auditor ตรวจ
+                                    result, color = validate_mission_compliance(topic, desc, current_report)
+                                
                                 st.session_state.audit_results[topic] = (result, color)
                                 
                                 if color == "green":
@@ -320,16 +379,26 @@ else:
                             st.session_state.sales_checklist = checklist_status
                             st.rerun()
             
+            # กล่องข้อความ
             main_report_text = st.text_area("📝 รายงานผลรวม:", value=st.session_state.report_text_buffer, height=100)
             st.session_state.report_text_buffer = main_report_text
             
+            # ปุ่มตรวจมือ
             if st.button("🔄 ตรวจสอบข้อความที่พิมพ์แก้ใหม่"):
                 with st.spinner("AI กำลังตรวจใหม่..."):
                     checklist_status = st.session_state.sales_checklist
                     for index, row in my_missions.iterrows():
                         topic = row['topic']
                         desc = row['desc']
-                        result, color = validate_mission_compliance(topic, desc, main_report_text)
+                        
+                        # Bypass Logic เดิม
+                        is_general_task = any(kw in topic.lower() for kw in ["monthly", "visit", "contact", "เยี่ยม", "ทั่วไป", "ติดตาม"])
+                        
+                        if is_general_task:
+                            result, color = "✅ บันทึกข้อมูลเรียบร้อย (General Visit)", "green"
+                        else:
+                            result, color = validate_mission_compliance(topic, desc, main_report_text)
+                            
                         st.session_state.audit_results[topic] = (result, color)
                         if color == "green":
                             checklist_status.add(topic)
@@ -350,27 +419,32 @@ else:
             
             icon = "✅" if is_done else "🔴"
             
+            # เช็คงานทั่วไป
+            is_general_task = any(kw in topic.lower() for kw in ["monthly", "visit", "contact", "เยี่ยม", "ทั่วไป", "ติดตาม"])
+            
             with st.expander(f"{icon} **{topic}**: {desc}", expanded=not is_done):
                 
-                # [NEW] เพิ่ม Guideline ตรงนี้
-                st.markdown("""
-                <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 10px; font-size: 0.85em; color: #31333F;">
-                    💡 <b>Guideline (ตอบยังไงให้ผ่าน):</b><br>
-                    1. <b>ข้อมูลชัด:</b> ระบุราคา, จำนวน, หรือยี่ห้อคู่แข่ง<br>
-                    2. <b>Timeline:</b> ถ้ายังไม่ซื้อ ให้ระบุว่า <i>"จะสรุปเมื่อไหร่"</i> หรือ <i>"รอผู้ใหญ่เซ็น"</i><br>
-                    3. <b>ปฏิเสธ:</b> ถ้าลูกค้าไม่เอา ให้บอกเหตุผล (เช่น แพงไป) ถือว่าผ่าน
-                </div>
-                """, unsafe_allow_html=True)
+                # [Guideline] โชว์เฉพาะงานที่ต้องตรวจ
+                if not is_general_task:
+                    st.markdown("""
+                    <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 10px; font-size: 0.85em; color: #31333F;">
+                        💡 <b>Guideline:</b> ระบุข้อมูล/ตัวเลข หรือ Timeline วันที่จะรู้ผล
+                    </div>
+                    """, unsafe_allow_html=True)
 
                 if topic in st.session_state.audit_results:
                     res_text, res_color = st.session_state.audit_results[topic]
                     display_text = res_text.replace("PASS:", "").replace("FAIL:", "").strip()
+                    
                     if res_color == "green":
                         st.success(f"ผลตรวจ: {display_text}")
                     else:
                         st.error(f"ผลตรวจ: {display_text}")
                 else:
-                    st.info("รอข้อมูล...")
+                    if is_general_task:
+                        st.info("รอรับข้อมูล (ไม่ต้องตรวจสอบ)")
+                    else:
+                        st.info("รอข้อมูล... (AI จะช่วยตรวจสอบ)")
 
         # === Submit ===
         completed_count = len(checklist_status)
@@ -391,6 +465,13 @@ else:
                     
                     append_data("Reports", report_row)
                     delete_mission_from_sheet(target_cust)
+                    
+                    # Auto-Followup
+                    with st.spinner("AI กำลังสร้างงานติดตามผล..."):
+                        followup = create_followup_mission(target_cust, main_report_text)
+                        if followup.get("create"):
+                            append_data("Missions", [target_cust, followup['topic'], followup['desc'], "pending"])
+                            st.toast(f"สร้างงานใหม่: {followup['topic']}", icon="📅")
                     
                     if target_cust in st.session_state.sales_checklist:
                         del st.session_state.sales_checklist[target_cust]
