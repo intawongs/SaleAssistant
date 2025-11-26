@@ -185,7 +185,7 @@ def create_followup_mission(customer, report_text):
         """
         
         completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant", 
+            model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}], 
             temperature=0.0, # บังคับให้ทำตาม Step เป๊ะๆ
             response_format={"type": "json_object"}
