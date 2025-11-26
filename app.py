@@ -223,25 +223,44 @@ def generate_talking_points(customer, mission_df):
     except: return "..."
 
 
-# 3.2 [NEW] วิเคราะห์ Sentiment
+# ==========================================
+# 3.2 [FIXED] วิเคราะห์ Sentiment (ตัดคำเวิ่นเว้อทิ้ง)
+# ==========================================
 def analyze_sentiment(report_text):
     try:
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        
         prompt = f"""
-        Role: Sales Analyst
-        Task: ให้คะแนน Sentiment จากรายงาน: "{report_text}"
-        Criteria:
-        🟢 Positive: สนใจ, สั่งซื้อ, นัดวันชัดเจน
-        🟡 Neutral: รอตัดสินใจ, กลางๆ
-        🔴 Negative: ปฏิเสธ, ไม่สนใจ, มีปัญหา
-        Output: เลือก 1 อัน (🟢 Positive / 🟡 Neutral / 🔴 Negative)
+        Task: Classify sentiment of this sales report.
+        Input: "{report_text}"
+        
+        Rules:
+        - Output ONLY one of the following strings.
+        - NO explanation. NO intro text.
+        
+        Options:
+        "🟢 Positive" (Interested, Buying, Happy)
+        "🟡 Neutral" (Waiting, Undecided, Normal)
+        "🔴 Negative" (Rejected, Angry, Problem)
         """
+        
         completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="llama-3.1-8b-instant", # ใช้ตัวเล็กได้ เร็วดี
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.0, max_tokens=10
+            temperature=0.0, 
+            max_tokens=10
         )
-        return completion.choices[0].message.content.strip()
+        result = completion.choices[0].message.content.strip()
+        
+        # --- Python Cleaning (กันเหนียว) ---
+        # ถ้า AI เผลอพูดเยอะ เราจะดักจับ Keyword เอาเองเลย
+        if "Positive" in result: return "🟢 Positive"
+        if "Negative" in result: return "🔴 Negative"
+        if "Neutral" in result: return "🟡 Neutral"
+        
+        # ถ้าจับไม่ได้เลย ให้เป็นกลางไว้ก่อน
+        return "🟡 Neutral"
+        
     except: return "⚪ Unknown"
 
 # ==========================================
