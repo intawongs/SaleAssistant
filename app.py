@@ -112,29 +112,43 @@ def get_task_status_by_date(topic_str):
 # ==========================================
 
 # 3.1 สรุปความ (จับคู่โจทย์ + สั้นกระชับ)
+# ==========================================
+# 3.1 สรุปความ (Smart Mapping - แสดงเฉพาะสิ่งที่พูด)
+# ==========================================
 def summarize_voice_report(raw_text, customer_name, mission_df):
     try:
         if "GROQ_API_KEY" not in st.secrets: return raw_text
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
-        tasks_text = "\n".join([f"- {row['topic']}: {row['desc']}" for _, row in mission_df.iterrows()]) if not mission_df.empty else "ทั่วไป"
+        # เตรียมรายการโจทย์
+        if not mission_df.empty:
+            tasks_text = "\n".join([f"- {row['topic']}" for _, row in mission_df.iterrows()])
+        else:
+            tasks_text = "ไม่มีโจทย์พิเศษ"
 
         prompt = f"""
-        Task: สรุปรายงานการขาย (จับคู่โจทย์-คำตอบ)
+        Role: AI สรุปรายงานการขายที่ "เนื้อๆ เน้นๆ"
         Input: "{raw_text}"
-        Questions: {tasks_text}
         
-        คำสั่ง:
-        1. สรุปเป็น Bullet Points: "**[โจทย์]**: [คำตอบสั้นๆ]"
-        2. ถ้ามีเรื่องอื่น ให้ใส่หัวข้อ "**อื่นๆ**: ..."
-        3. ตัดคำเยิ่นเย้อ (เช่น "ลูกค้าแจ้งว่า", "จากการสอบถาม") ออกให้หมด เอาเนื้อหาเลย
-        4. รักษาตัวเลข/วันที่ ไว้ให้ครบ
+        Context: เซลล์ไปเยี่ยมลูกค้า "{customer_name}" โดยมีโจทย์ที่ต้องถามคือ:
+        {tasks_text}
+        
+        คำสั่ง (Strict Rules):
+        1. **จับคู่:** ถ้าสิ่งที่เซลล์พูด เกี่ยวข้องกับโจทย์ข้อไหน ให้สรุปใส่ข้อนั้น
+           Format: "- **[ชื่อโจทย์]**: [เนื้อหาที่เซลล์พูด]"
+           
+        2. **ตัดทิ้ง (สำคัญมาก):** โจทย์ข้อไหนที่เซลล์ **"ไม่ได้พูดถึง"** ห้ามเขียนออกมาเด็ดขาด! (ห้ามเขียนว่า ไม่มีข้อมูล / ไม่ได้ระบุ)
+        
+        3. **ส่วนเกิน:** ถ้าสิ่งที่พูด ไม่ตรงกับโจทย์ข้อไหนเลย ให้ใส่ในหัวข้อ "- **ข้อมูลเพิ่มเติม**: ..."
+        
+        4. **ห้าม** ใส่คำว่า "อื่นๆ: ไม่มีข้อมูล" หรือสรุปจบใดๆ เอาแค่เนื้อหาที่จับคู่ได้เท่านั้น
         """
         
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.3-70b-versatile", # ใช้ตัวฉลาดสุดเพื่อการจับคู่ที่แม่นยำ
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.1, max_tokens=300
+            temperature=0.1, 
+            max_tokens=300
         )
         return completion.choices[0].message.content
     except: return raw_text
