@@ -10,8 +10,9 @@ import io
 from pydub import AudioSegment
 from groq import Groq
 import json
+import re
 
-st.set_page_config(page_title="RC Sales AI (Smart Date)", layout="wide", page_icon="📅")
+st.set_page_config(page_title="RC Sales AI (Direct Voice)", layout="wide", page_icon="🗣️")
 
 # ==========================================
 # 1. CONNECTIONS
@@ -58,7 +59,7 @@ def delete_mission_from_sheet(customer_name):
     except Exception as e: st.error(f"Delete Error: {e}")
 
 # ==========================================
-# 2. UTILITIES
+# 2. UTILITIES (Date Parser Fixed)
 # ==========================================
 def transcribe_audio(audio_bytes):
     r = sr.Recognizer()
@@ -73,134 +74,66 @@ def transcribe_audio(audio_bytes):
             return text
     except: return None
 
-# [ฟังก์ชันแยกงาน วันนี้ vs อนาคต ยังคงใช้ Logic Python เดิมเพราะแม่นยำเรื่องการเปรียบเทียบวัน]
-
-# ==========================================
-# [FIXED] ฟังก์ชันแยกแยะวันที่ (ฉลาดขึ้น + รองรับทุก Format)
-# ==========================================
 def get_task_status_by_date(topic_str):
     try:
         if not isinstance(topic_str, str): return 'today'
-        
         today = datetime.date.today()
         
-        # 1. หา Pattern ตัวเลข (รองรับ / และ - และเว้นวรรค)
-        # ตัวอย่างที่จับได้: 27/11/2025, 27-11-2025, 27 / 11 / 2025
+        # 1. หา Pattern ตัวเลข / (เช่น 27/11/2025)
         match_digit = re.search(r"(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{4})", topic_str)
-        
         if match_digit:
             d, m, y = map(int, match_digit.groups())
-            
-            # เช็คปี พ.ศ. (ถ้ามากกว่า 2400 เดาว่าเป็น พ.ศ. ให้ลบ 543)
             if y > 2400: y -= 543
-            
             task_date = datetime.date(y, m, d)
             return 'future' if task_date > today else 'today'
 
-        # 2. หา Pattern ภาษาไทย (รองรับวงเล็บและไม่วงเล็บ)
-        # ตัวอย่างที่จับได้: 27 พ.ย., 27 พฤศจิกายน
+        # 2. หา Pattern ภาษาไทย (เช่น 27 พ.ย.)
         match_thai = re.search(r"(\d{1,2})\s+([ก-๙.]+)", topic_str)
-        
         if match_thai:
             day = int(match_thai.group(1))
             month_str = match_thai.group(2)
-            
-            thai_months = {
-                "ม.ค.":1,"มกราคม":1,"ก.พ.":2,"กุมภาพันธ์":2,"มี.ค.":3,"มีนาคม":3,"เม.ย.":4,"เมษายน":4,"พ.ค.":5,"พฤษภาคม":5,"มิ.ย.":6,"มิถุนายน":6,
-                "ก.ค.":7,"กรกฎาคม":7,"ส.ค.":8,"สิงหาคม":8,"ก.ย.":9,"กันยายน":9,"ต.ค.":10,"ตุลาคม":10,"พ.ย.":11,"พฤศจิกายน":11,"ธ.ค.":12,"ธันวาคม":12
-            }
-            
+            thai_months = {"ม.ค.":1,"มกราคม":1,"ก.พ.":2,"กุมภาพันธ์":2,"มี.ค.":3,"มีนาคม":3,"เม.ย.":4,"เมษายน":4,"พ.ค.":5,"พฤษภาคม":5,"มิ.ย.":6,"มิถุนายน":6,"ก.ค.":7,"กรกฎาคม":7,"ส.ค.":8,"สิงหาคม":8,"ก.ย.":9,"กันยายน":9,"ต.ค.":10,"ตุลาคม":10,"พ.ย.":11,"พฤศจิกายน":11,"ธ.ค.":12,"ธันวาคม":12}
             month = 0
             for k,v in thai_months.items():
-                if k in month_str: 
-                    month = v
-                    break
+                if k in month_str: month = v; break
             
             if month > 0:
                 year = today.year
-                # Logic ข้ามปี: ถ้าเดือนในโจทย์ น้อยกว่าเดือนปัจจุบัน (เช่น ตอนนี้ธันวา สั่งงานมกรา)
                 if month < today.month: year += 1
-                
                 try:
                     task_date = datetime.date(year, month, day)
                     return 'future' if task_date > today else 'today'
-                except ValueError:
-                    return 'today' # วันที่ผิด (เช่น 30 ก.พ.) ให้ทำเลย
-
-        # 3. ถ้าหาไม่เจอเลย
+                except: return 'today'
         return 'today'
-        
-    except Exception as e:
-        # st.error(f"Date Parse Error: {e}") # เปิดบรรทัดนี้ถ้าอยากเห็น Error
-        return 'today'
+    except: return 'today'
+
 # ==========================================
-# 3. AI LOGIC (Groq) - ปรับปรุงใหม่
+# 3. AI LOGIC (Groq)
 # ==========================================
 
-# 3.1 สรุปความ (สั้น กระชับ ได้ใจความ)
-def summarize_voice_report(raw_text, customer_name):
-    try:
-        if "GROQ_API_KEY" not in st.secrets: return raw_text
-        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-        
-        prompt = f"""
-        Task: สรุปรายงานการขายของลูกค้า {customer_name}
-        Input: "{raw_text}"
-        
-        คำสั่ง:
-        - สรุปสั้นๆ ห้วนๆ แบบภาษาข่าว (Concise Bullet Points)
-        - ตัดคำฟุ่มเฟือยทิ้งให้หมด (เช่น "ครับ", "ผมคิดว่า")
-        - **ห้ามตัด** ตัวเลข, วันที่, ราคา, ชื่อคน
-        """
-        
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3, max_tokens=200
-        )
-        return completion.choices[0].message.content
-    except: return raw_text
+# [ลบฟังก์ชัน summarize_voice_report ออกแล้ว]
 
-# 3.2 Auto-Followup (AI ฉลาดเลือกวัน)
-# ==========================================
-# ==========================================
-# 3.2 Auto-Followup (ใส่ Topic เดิม + ตัดคำเวิ่นเว้อ)
-# ==========================================
-def create_followup_mission(customer, report_text, original_topics):
+# 3.2 Auto-Followup (Date Logic แม่นยำ)
+def create_followup_mission(customer, report_text):
     try:
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         today = datetime.datetime.now().strftime("%d/%m/%Y")
         
-        # Force GMT+7 for correct tomorrow
-        tz = datetime.timezone(datetime.timedelta(hours=7))
-        now = datetime.datetime.now(tz)
-        tomorrow_str = (now + datetime.timedelta(days=1)).strftime("%d/%m/%Y")
-        
         prompt = f"""
-        Role: ระบบ Scheduler อัจฉริยะ
-        Date Today: {today} (Tomorrow: {tomorrow_str})
-        Report: "{report_text}"
-        Original Task: "{original_topics}"
+        Role: Scheduler. Date: {today}. Input: "{report_text}"
+        Task: Create NEXT mission (`create`: true).
         
-        ภารกิจ: สร้างงานใหม่ (`create`: true)
-        
-        🔥 กฎการตั้งชื่อ Topic (Format):
-        "Follow up ([วันที่นัด]) (เรื่อง: {original_topics})"
-        
-        🔥 กฎเนื้อหา (Desc):
-        - เอาเฉพาะเนื้อหาที่เกี่ยวกับวันที่หรือสิ่งที่ต้องทำ
-        - **ห้ามใส่** ประโยคปฏิเสธเช่น "ไม่มีข้อมูลเพิ่มเติม...", "หากต้องการข้อมูล..." ให้ตัดทิ้งให้หมด
-        
-        🔥 Date Logic:
-        1. เจอวันที่ (5 ธ.ค.) -> ใช้ 5 ธ.ค.
-        2. เจอ "พรุ่งนี้" -> ใช้ {tomorrow_str}
-        3. ไม่เจอเลย -> Monthly Visit
+        🔥 Date Priority Rules:
+        1. **Specific Date** (e.g. 7 ธ.ค., วันที่ 15) -> Topic: "Follow up ([Date])"
+        2. **Month Only** (e.g. มกราคม) -> Topic: "Follow up (1 [Month])"
+        3. **Quarter** (e.g. Q1) -> Topic: "Follow up (1 [First Month])"
+        4. **No Date** -> Topic: "Monthly Visit"
         
         Output JSON: {{ "create": true, "topic": "...", "desc": "...", "status": "pending" }}
         """
         
         completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant", 
+            model="llama-3.3-70b-versatile", 
             messages=[{"role": "user", "content": prompt}], 
             temperature=0.1, response_format={"type": "json_object"}
         )
@@ -315,7 +248,7 @@ else:
             st.info(f"🔹 **{row['topic']}**: {row['desc']}")
         
         st.divider()
-        st.write("🎙️ **รายงานผล (AI สรุปให้):**")
+        st.write("🎙️ **รายงานผล (พูดแล้วข้อความจะขึ้นด้านล่าง):**")
         
         c1, c2 = st.columns([1, 4])
         with c1:
@@ -326,35 +259,27 @@ else:
                 if 'last_audio' not in st.session_state: st.session_state.last_audio = None
                 if audio['bytes'] != st.session_state.last_audio:
                     st.session_state.last_audio = audio['bytes']
-                    with st.spinner("กำลังสรุปสั้นๆ..."):
+                    with st.spinner("กำลังแปลงเสียง..."):
                         raw_text = transcribe_audio(audio['bytes'])
                         if raw_text:
-                            st.session_state.raw_voice_buffer = raw_text
-                            summary = summarize_voice_report(raw_text, target_cust)
-                            st.session_state.report_text_buffer = summary
+                            # [DIRECT] ไม่ต้องผ่าน AI Summarizer เอาข้อความดิบใส่เลย
+                            st.session_state.report_text_buffer = raw_text
                             st.rerun()
             
-            final_report = st.text_area("📝 สรุป:", value=st.session_state.report_text_buffer, height=150)
+            final_report = st.text_area("📝 รายละเอียด:", value=st.session_state.report_text_buffer, height=150)
             st.session_state.report_text_buffer = final_report
-            
-            if st.session_state.raw_voice_buffer:
-                with st.expander("ดูเสียงต้นฉบับ"): st.caption(st.session_state.raw_voice_buffer)
 
-        
         if st.session_state.report_text_buffer:
             if st.button("🚀 ปิดงาน (Save)", type="primary", use_container_width=True):
                 ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                
-                # 1. เตรียม Topics
                 topics = ", ".join(df_today['topic'].tolist())
                 
-                # 2. Save Report
+                # Save Raw Text directly
                 append_data("Reports", [ts, cur_user, target_cust, topics, "Completed", final_report])
                 delete_mission_from_sheet(target_cust)
                 
-                # 3. [แก้ตรงนี้] ส่ง topics เข้าไปด้วย
-                with st.spinner("Generating Next Mission..."):
-                    fup = create_followup_mission(target_cust, final_report, topics) # <--- ส่ง topics เพิ่ม
+                with st.spinner("Creating Next Mission..."):
+                    fup = create_followup_mission(target_cust, final_report)
                     if fup.get("create"):
                         append_data("Missions", [target_cust, fup['topic'], fup['desc'], "pending"])
                         st.toast(f"Next: {fup['topic']}", icon="📅")
@@ -364,6 +289,8 @@ else:
                 st.session_state.talking_points_cache = None
                 time.sleep(2)
                 st.rerun()
+        else:
+            st.button("🔒 ปิดงาน", disabled=True, use_container_width=True)
 
     # === FUTURE MISSION ===
     if not df_future.empty:
