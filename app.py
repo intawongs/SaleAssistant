@@ -260,7 +260,7 @@ def create_followup_mission(customer, report_text, original_topic):
     except:
         return {"create": True, "topic": "Follow up Auto", "desc": "System Auto-Gen", "status": "pending"}
     
-    
+
 # 3.3 AI Coach
 def generate_talking_points(customer, mission_df):
     try:
@@ -278,40 +278,50 @@ def generate_talking_points(customer, mission_df):
 # ==========================================
 # 3.2 [FIXED] วิเคราะห์ Sentiment (ตัดคำเวิ่นเว้อทิ้ง)
 # ==========================================
+# ==========================================
+# 3.2 [UPDATED] วิเคราะห์ Sentiment (จูนให้ Positive ง่ายขึ้น)
+# ==========================================
 def analyze_sentiment(report_text):
     try:
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
         prompt = f"""
-        Task: Classify sentiment of this sales report.
-        Input: "{report_text}"
+        Role: Sales Analyst ผู้มองโลกในแง่ธุรกิจ
+        Task: ให้คะแนน Sentiment จากรายงาน: "{report_text}"
         
-        Rules:
-        - Output ONLY one of the following strings.
-        - NO explanation. NO intro text.
+        🔥 เกณฑ์การให้คะแนน (Strict Business Criteria):
         
-        Options:
-        "🟢 Positive" (Interested, Buying, Happy)
-        "🟡 Neutral" (Waiting, Undecided, Normal)
-        "🔴 Negative" (Rejected, Angry, Problem)
+        🟢 Positive (ดี/บวก):
+           - **มีออเดอร์** (ไม่ว่าจะสั่งเพิ่ม หรือ สั่งต่อเนื่อง)
+           - **ลูกค้ายังใช้อยู่** (Active Customer)
+           - สนใจ, นัดวันได้, ตอบรับดี
+           - "เหมือนเดิม", "ปกติ" (ในบริบทที่มีออเดอร์ถือว่าดี)
+           
+        🟡 Neutral (กลางๆ/ทั่วไป):
+           - รอตัดสินใจ, รอดูงบ, ยังไม่ฟันธง
+           - "ของยังเหลือ" (Stock แน่น เลยยังไม่สั่งเพิ่ม)
+           - แจ้งข้อมูลทั่วไป ไม่ได้บอกว่าจะซื้อหรือไม่ซื้อ
+           
+        🔴 Negative (ลบ/แย่):
+           - ปฏิเสธชัดเจน, ไม่สนใจ, เลิกซื้อ
+           - บ่นด่า, มีปัญหาคุณภาพสินค้า
+           - หันไปใช้คู่แข่ง
+        
+        Output: เลือก 1 อันเท่านั้น (🟢 Positive / 🟡 Neutral / 🔴 Negative)
         """
         
         completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant", # ใช้ตัวเล็กได้ เร็วดี
+            model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0, 
             max_tokens=10
         )
         result = completion.choices[0].message.content.strip()
         
-        # --- Python Cleaning (กันเหนียว) ---
-        # ถ้า AI เผลอพูดเยอะ เราจะดักจับ Keyword เอาเองเลย
+        # Python Cleaning
         if "Positive" in result: return "🟢 Positive"
         if "Negative" in result: return "🔴 Negative"
-        if "Neutral" in result: return "🟡 Neutral"
-        
-        # ถ้าจับไม่ได้เลย ให้เป็นกลางไว้ก่อน
-        return "🟡 Neutral"
+        return "🟡 Neutral" # Default เป็นกลางไว้ก่อน
         
     except: return "⚪ Unknown"
 
