@@ -109,7 +109,7 @@ def generate_talking_points(customer_name, mission_df):
 # 3.2 [ใหม่] สร้างตัวเลือกคำตอบอัตโนมัติ (Dynamic Options)
 # ==========================================
 # ==========================================
-# 3.2 [FINAL SIMPLE] สร้างตัวเลือกคำตอบอัตโนมัติ (ให้ AI คิดเองเลย)
+# 3.2 [FINAL FIXED] สร้างตัวเลือกคำตอบ (ตัดคำพูดเวิ่นเว้อออก)
 # ==========================================
 @st.cache_data(show_spinner=False)
 def get_dynamic_options(topic, desc):
@@ -118,35 +118,55 @@ def get_dynamic_options(topic, desc):
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         
         prompt = f"""
-        Task: สร้างตัวเลือกคำตอบ 3 ข้อ สำหรับให้เซลล์ติ๊กรายงานผลเรื่อง "{topic}"
+        Task: Generate exactly 3 short Thai options for a sales checklist based on: "{topic}"
         
-        คำสั่ง:
-        ขอ 3 ตัวเลือกที่เป็นไปได้มากที่สุด เรียงลำดับดังนี้:
-        1. ทางบวก (สำเร็จ / ตกลง / ไม่กระทบ / ดี)
-        2. ทางกลาง (รอสรุป / ลังเล / ปานกลาง)
-        3. ทางลบ (ปฏิเสธ / เลื่อน / กระทบหนัก / แย่)
+        Rules:
+        1. Output ONLY the options separated by commas.
+        2. NO introduction text (e.g., do NOT say "Here are the options").
+        3. NO numbering (1. 2. 3.).
         
-        Output Format: ขอแค่ข้อความภาษาไทยสั้นๆ คั่นด้วย comma (,) ห้ามมีเลขข้อ
-        ตัวอย่าง: ยืนยันออเดอร์, ขอคิดดูก่อน, ยังไม่สั่งซื้อ
+        Format: Option1, Option2, Option3
+        
+        Example: ยืนยันออเดอร์, ขอคิดดูก่อน, ยังไม่สั่งซื้อ
         """
         
         completion = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3, # เพิ่มความคิดสร้างสรรค์นิดนึงให้เข้ากับบริบท
-            max_tokens=60
+            temperature=0.1, # ลดความสร้างสรรค์ลง เพื่อให้ทำตาม Format เป๊ะๆ
+            max_tokens=50
         )
-        options = completion.choices[0].message.content.split(',')
-        clean_options = [opt.strip() for opt in options if opt.strip()]
         
-        # ใส่ Emoji อัตโนมัติเพื่อความสวยงาม
-        if len(clean_options) >= 3:
-            clean_options[0] = "✅ " + clean_options[0].replace("✅", "")
-            clean_options[1] = "⏳ " + clean_options[1].replace("⏳", "")
-            clean_options[2] = "❌ " + clean_options[2].replace("❌", "")
-            return clean_options[:3]
+        # --- ส่วนกรองคำตอบ (Cleaning Logic) ---
+        raw_text = completion.choices[0].message.content
+        
+        # 1. ถ้า AI เผลอพูดนำ เช่น "Answer: A, B, C" ให้ตัดส่วนหน้าทิ้ง
+        if ":" in raw_text:
+            raw_text = raw_text.split(":")[-1]
             
-        return ["✅ สำเร็จ/ดี", "⏳ รอสรุป/กลางๆ", "❌ ปฏิเสธ/แย่"]
+        # 2. แยกด้วย Comma หรือ Newline
+        if "," in raw_text:
+            options = raw_text.split(',')
+        else:
+            options = raw_text.split('\n')
+            
+        # 3. ลบช่องว่างและตัวอักษรขยะ
+        clean_options = [opt.strip().replace("1.", "").replace("- ", "") for opt in options if opt.strip()]
+        
+        # 4. เติม Emoji ให้สวยงาม (ถ้ายังไม่มี)
+        final_options = []
+        emojis = ["✅ ", "⏳ ", "❌ "]
+        for i, opt in enumerate(clean_options[:3]):
+            # เช็คว่ามี emoji เดิมอยู่แล้วไหม
+            if any(e in opt for e in ["✅", "⏳", "❌", "⚠️"]):
+                final_options.append(opt)
+            else:
+                # ถ้าไม่มี ให้เติมตามลำดับ (ดี/กลาง/แย่)
+                final_options.append(f"{emojis[i]}{opt}")
+            
+        if len(final_options) < 3: return ["✅ สำเร็จ/ดี", "⏳ รอสรุป/กลางๆ", "❌ ปฏิเสธ/แย่"]
+        return final_options
+        
     except:
         return ["✅ สำเร็จ/ดี", "⏳ รอสรุป/กลางๆ", "❌ ปฏิเสธ/แย่"]
 
